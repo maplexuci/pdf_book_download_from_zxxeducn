@@ -1,5 +1,32 @@
 import requests
 import json
+import os
+
+def get_parts(retrun_type='json'):
+    '''
+    get urls
+    return list
+    '''
+
+    # 获取最新的part json urls
+    url = 'https://s-file-1.ykt.cbern.com.cn/zxx/ndrs/resources/tch_material/version/data_version.json'
+    headers = {
+        "User-Agent" : "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36 Edg/113.0.0.0"
+    }
+    req = requests.get(url=url, headers=headers)
+    
+    # 处理返回数据
+    if retrun_type == 'json':
+        data = json.loads(req.text)
+    else:
+        data = req.text
+
+    # 返回urls列表
+    value = data['urls'].split(',')
+
+    return value
+
+
 
 def pdf_download(table: int=0, item: int=0):
     """
@@ -12,10 +39,13 @@ def pdf_download(table: int=0, item: int=0):
 
     If no value is passed to these arguments, the download will start from the beginning, which may result repetitive downloading.
     """
-    url = ['https://s-file-1.ykt.cbern.com.cn/zxx/ndrs/resources/tch_material/part_100.json',
-           'https://s-file-2.ykt.cbern.com.cn/zxx/ndrs/resources/tch_material/part_101.json',
-           'https://s-file-2.ykt.cbern.com.cn/zxx/ndrs/resources/tch_material/part_102.json',
-            ]
+    # url = ['https://s-file-1.ykt.cbern.com.cn/zxx/ndrs/resources/tch_material/part_100.json',
+    #        'https://s-file-2.ykt.cbern.com.cn/zxx/ndrs/resources/tch_material/part_101.json',
+    #        'https://s-file-2.ykt.cbern.com.cn/zxx/ndrs/resources/tch_material/part_102.json',
+    #         ]
+
+    url = get_parts()
+
     t = 0 + table
     for ref in url[table:]:
         print(f"正在下载目录{t+1}/3中的电子教材")
