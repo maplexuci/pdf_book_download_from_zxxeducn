@@ -69,7 +69,15 @@ def pdf_download(table: int=0, item: int=0):
             book_pdf_url = f"https://r1-ndr.ykt.cbern.com.cn/edu_product/esp/assets_document/{book_id}.pkg/pdf.pdf"
             dl_response = requests.get(book_pdf_url)
 
-            file_path = f'/Users/zxu/Downloads/{book_name}'
+            # file_path = f'/Users/zxu/Downloads/{book_name}'
+            
+            # 下载路径为 工作目录下的/zxu/Downloads
+            work_path = f"{os.getcwd()}/zxu/Downloads/"
+            if not os.path.exists(work_path):  # 如果路径不存在
+                os.makedirs(work_path)  # 创建路径
+            
+            # 文件路径
+            file_path = work_path + book_name
             with open (file_path, 'wb') as f:
                 f.write(dl_response.content)
 
