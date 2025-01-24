@@ -16,6 +16,8 @@ This script downloads digital textbooks from Smart Education of China (国家中
 
 ## Features
 - Downloads textbooks in PDF format
+- Avoide site authetication
+- Cross plateform operation
 - Organizes downloads by publisher
 - Supports resume functionality for interrupted downloads
 - Saves files to `~/Downloads/textbook_download/` directory
