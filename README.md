@@ -38,6 +38,7 @@ The script supports two parameters to resume interrupted downloads:
 Example to resume download:
 
 `# To resume from the second catalog (index 1), after downloading 200 books`
+
 `pdf_download(table=1, item=200)`
 
 ## Output Location
