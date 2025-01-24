@@ -10,3 +10,45 @@
 - 电子课本统一下载到你所在用户下的Downloads/textbook_download文件夹内
   
 安装python3.9及以上版本。 
+
+# PDF Textbook Downloader for Smart Education of China
+This script downloads digital textbooks from Smart Education of China (国家中小学智慧教育平台).
+
+## Features
+- Downloads textbooks in PDF format
+- Organizes downloads by publisher
+- Supports resume functionality for interrupted downloads
+- Saves files to `~/Downloads/textbook_download/` directory
+  
+## Usage
+### Basic Usage
+Simply run the script to download all textbooks:
+`python pdf_book_download_from_zxxeducn.py`
+
+### Resume Interrupted Downloads
+The script supports two parameters to resume interrupted downloads:
+1. `table` (default=0): Specifies which URL catalog to start from
+  - Values range from 0 to 2 (there are 3 catalogs in total)
+  - Use (current catalog number - 1) to resume from a specific catalog
+2. `item` (default=0): Specifies how many books to skip in the current catalog
+  - Useful when you know how many books were already downloaded
+    
+Example to resume download:
+`# To resume from the second catalog (index 1), after downloading 200 books
+pdf_download(table=1, item=200)`
+
+## Output Location
+- All PDFs are saved to: `~/Downloads/textbook_download/`
+- Files are named using the format: `[Publisher][Book Title].pdf`
+  
+## Progress Tracking
+The script provides progress information during download:
+- Shows current catalog progress (e.g., "正在下载目录1/4中的电子教材")
+- Shows download progress within each catalog (e.g., "当前目录下共有X本电子教材, 已下载 Y/X")
+- Displays error messages if downloads fail
+  
+## Requirements
+- Python 3.x
+- `requests` library
+- Internet connection
+- Sufficient disk space for downloaded PDFs
