@@ -23,6 +23,7 @@ This script downloads digital textbooks from Smart Education of China (国家中
 ## Usage
 ### Basic Usage
 Simply run the script to download all textbooks:
+
 `python pdf_book_download_from_zxxeducn.py`
 
 ### Resume Interrupted Downloads
@@ -34,6 +35,7 @@ The script supports two parameters to resume interrupted downloads:
   - Useful when you know how many books were already downloaded
     
 Example to resume download:
+
 `# To resume from the second catalog (index 1), after downloading 200 books
 pdf_download(table=1, item=200)`
 
