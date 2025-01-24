@@ -31,7 +31,7 @@ The script supports two parameters to resume interrupted downloads:
 1. `table` (default=0): Specifies which URL catalog to start from
   - Values range from 0 to 3 (there are 4 catalogs in total)
   - First three catalogs has 1000 textbooks each
-  - Use (current catalog number, e.g., 1 (the 2nd catalog)) to resume from a specific catalog
+  - Use (current catalog number, e.g., 1) to resume from a the 2nd catalog
 2. `item` (default=0): Specifies how many books to skip in the current catalog
   - Useful when you know how many books were already downloaded
     
