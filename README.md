@@ -33,50 +33,59 @@ This script downloads digital textbooks from Smart Education of China (国家中
 - Saves files to `~/Downloads/textbook_download/` directory
   
 ## Usage
-usage: python3 pdf_book_download_from_zxxeducn.py [-h] [--single SINGLE] [--limit LIMIT] [--table TABLE] [--item ITEM]
+usage: pdf_book_download_from_zxxeducn.py [-h] [--single SINGLE] [--limit LIMIT] [--table TABLE] [--item ITEM]
 
 Download textbooks from the National Smart Education Platform (国家中小学智慧教育平台)
 
+This script allows you to download textbooks in PDF format from the National Smart 
+Education Platform. You can download all textbooks, a single specific book, or a 
+limited number of books. The script also supports resuming downloads from a specific 
+point if the previous download was interrupted.
+
+The downloaded PDFs will be saved to:
+~/Downloads/textbook_download/
+
 options:
   -h, --help       show this help message and exit
-  --single SINGLE  Download only one specific book number
-  --limit LIMIT    Limit the number of books to download
-  --table TABLE    Start from specific table index (0-based)
-  --item ITEM      Start from specific item index (0-based)
+  --single SINGLE  Download only one specific book number (e.g., --single 50 will download only the 50th book in the catalog)
+  --limit LIMIT    Limit the number of books to download (e.g., --limit 10 will download only 10 books and then stop)
+  --table TABLE    Start from specific table index (0-based). Use this with --item to resume an interrupted download. There are 4
+                   tables in total, therefore index range is 0-3. Default: 0
+  --item ITEM      Start from specific item index (0-based). Use this with --table to resume an interrupted download. There are
+                   1000 items in each of the first 3 tables, therefore index range is 0-999. Default: 0
 
-Examples:
-    # Download all books
-    python3 pdf_book_download_from_zxxeducn.py
-    
-    # Continue downloading from a specific point (e.g., from table 2, item 5),
-    # if you know 5 books from table 2 have been downloaded
-    python pdf_book_download_from_zxxeducn.py --table 1 --item 5
-    
-    # Download a single book (e.g., book number 50)
-    python pdf_book_download_from_zxxeducn.py --single 50
-    
-    # Download 10 books starting from the beginning
-    python pdf_book_download_from_zxxeducn.py --limit 10
-    
-    # Download 5 books starting from item 20 in table 3
-    python pdf_book_download_from_zxxeducn.py --table 2 --item 20 --limit 5
-    
-    # Replace python with python3 if you are using Python 3
+Detailed Usage:
+-------------
+1. Download all textbooks:
+   Simply run the script without any arguments
+   $ python pdf_book_download_from_zxxeducn.py
 
-### Resume Interrupted Downloads
-The script supports two parameters to resume interrupted downloads:
-1. `table` (default=0): Specifies which URL catalog to start from
-  - Values range from 0 to 3 (there are 4 catalogs in total)
-  - First three catalogs has 1000 textbooks each
-  - Use (current catalog number, e.g., 1) to resume from a the 2nd catalog
-2. `item` (default=0): Specifies how many books to skip in the current catalog
-  - Useful when you know how many books were already downloaded
-    
-Example to resume download:
+2. Download a specific book from table 1 (Default --table=0):
+   Use the --single argument with the book number
+   $ python pdf_book_download_from_zxxeducn.py --single 50
 
-`# To resume from the second catalog (index 1), after downloading 200 books`
+3. Download a limited number of books from table 2:
+   Use the --limit argument to specify how many books to download
+   $ python pdf_book_download_from_zxxeducn.py --table 1 --limit 10
 
-`pdf_download(table=1, item=200)`
+4. Resume interrupted download from table 3, item 6 (5 items have been downloaded):
+   Use --table and --item to specify where to resume
+   $ python pdf_book_download_from_zxxeducn.py --table 2 --item 5
+
+5. Combine arguments:
+   You can combine different arguments for more specific control (e.g. download 10 books from table 3, start from item 6)
+   $ python pdf_book_download_from_zxxeducn.py --table 2 --item 5 --limit 10
+
+Note: 
+- There are 4 tables in total, and there are 1000 items (books) in each of the first 3 tables
+- Table and item indices start from 0, so the first table is table 0, the first item is item 0
+- To pass --item argument, you need to know from which item you want to start downloading, e.g. if you want to start from the 20th item, you need to pass --item 19
+- Downloads are saved to your Downloads folder in a 'textbook_download' directory
+- The script requires an active internet connection
+- Replace python with python3 if you're using Python 3 explicitly
+
+For more information or bug reports, please visit:
+https://github.com/maplexuci/pdf_book_download_from_zxxeducn
 
 ## Output Location
 - All PDFs are saved to: `~/Downloads/textbook_download/`
