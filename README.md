@@ -49,12 +49,12 @@ The downloaded PDFs will be saved to:
 
 options:  
 
-  `-h, --help       show this help message and exit
-  --single SINGLE  Download only one specific book number (e.g., --single 50 will download only the 50th book in the catalog)
-  --limit LIMIT    Limit the number of books to download (e.g., --limit 10 will download only 10 books and then stop)
-  --table TABLE    Start from specific table index (0-based). Use this with --item to resume an interrupted download. There are 4
-                   tables in total, therefore index range is 0-3. Default: 0
-  --item ITEM      Start from specific item index (0-based). Use this with --table to resume an interrupted download. There are
+  `-h, --help       show this help message and exit`  
+  `--single SINGLE  Download only one specific book number (e.g., --single 50 will download only the 50th book in the catalog)`
+  `--limit LIMIT    Limit the number of books to download (e.g., --limit 10 will download only 10 books and then stop)`
+  `--table TABLE    Start from specific table index (0-based). Use this with --item to resume an interrupted download. There are 4
+                   tables in total, therefore index range is 0-3. Default: 0`
+  `--item ITEM      Start from specific item index (0-based). Use this with --table to resume an interrupted download. There are
                    1000 items in each of the first 3 tables, therefore index range is 0-999. Default: 0`
 
 Detailed Usage:
