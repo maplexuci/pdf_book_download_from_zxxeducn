@@ -1,12 +1,15 @@
 # pdf_book_download_from_zxxeducn.py
 从国家中小学智慧教育平台下载所有小学，初中，高中电子课本的程序。电子课本为能在该网站上所看到的最新版本 （部分课本是2024年版的），包括所有出版社版本，还包括五四学制的所有版本，甚至还包括特殊教育教材。
 
-网站更新后，大部分的源pdf文件都更改成唯一的名字，其中有中文的课本名称（包括版本等），而且每个课本还有一个独有的序列号，这使得源pdf的url没有统一的模式可循。虽然之前版本的程序还可运行，但所获取的源pdf的url是旧版本的，所以某些课本不是像在线浏览到的最新版本。更新后的网站还加入了注册机制。
+国家中小学智慧教育平台网站处于活跃更新状态，先前版本的程序虽然还可运行，但所获取的源pdf的url是旧版本的，所以某些课本不是像在线浏览到的最新版本。
+目前的网站更新加入了注册机制，并且几乎所有的pdf文件源都更改成了唯一的名字，包含中文的课本名称（包括出版社等），而且每个课本还有一个独有的序列号，这使得pdf源的url没有统一的模式可循。更新后的程序旨在解决这些问题，并同时进行了优化和加入了一些新的功能，使得运行起来更灵活和容易。
 
 更新后的程序：
+- 终端命令行运行
 - 绕过用户认证
 - 另辟蹊径找到每个电子课本pdf源的名字及URL
 - 跨操作系统运行
+- 下载更灵活，可自定义开始下载的位置和数量
 - 电子课本统一下载到你所在用户下的Downloads/textbook_download文件夹内
 
 # textbook_info.py
@@ -21,17 +24,44 @@ This script downloads digital textbooks from Smart Education of China (国家中
 
 ## Features
 - Downloads textbooks in PDF format
+- Command-line run
 - Avoide site authetication
 - Cross plateform operation
 - Organizes downloads by publisher
 - Supports resume functionality for interrupted downloads
+- Supports download from any point
 - Saves files to `~/Downloads/textbook_download/` directory
   
 ## Usage
-### Basic Usage
-Simply run the script to download all textbooks:
+usage: python3 pdf_book_download_from_zxxeducn.py [-h] [--single SINGLE] [--limit LIMIT] [--table TABLE] [--item ITEM]
 
-`python pdf_book_download_from_zxxeducn.py`
+Download textbooks from the National Smart Education Platform (国家中小学智慧教育平台)
+
+options:
+  -h, --help       show this help message and exit
+  --single SINGLE  Download only one specific book number
+  --limit LIMIT    Limit the number of books to download
+  --table TABLE    Start from specific table index (0-based)
+  --item ITEM      Start from specific item index (0-based)
+
+Examples:
+    # Download all books
+    python3 pdf_book_download_from_zxxeducn.py
+    
+    # Continue downloading from a specific point (e.g., from table 2, item 5),
+    # if you know 5 books from table 2 have been downloaded
+    python pdf_book_download_from_zxxeducn.py --table 1 --item 5
+    
+    # Download a single book (e.g., book number 50)
+    python pdf_book_download_from_zxxeducn.py --single 50
+    
+    # Download 10 books starting from the beginning
+    python pdf_book_download_from_zxxeducn.py --limit 10
+    
+    # Download 5 books starting from item 20 in table 3
+    python pdf_book_download_from_zxxeducn.py --table 2 --item 20 --limit 5
+    
+    # Replace python with python3 if you are using Python 3
 
 ### Resume Interrupted Downloads
 The script supports two parameters to resume interrupted downloads:
