@@ -65,22 +65,27 @@ Detailed Usage:
 -------------
 1. Download all textbooks:
    Simply run the script without any arguments
+   
    `python pdf_book_download_from_zxxeducn.py`
 
-2. Download a specific book from table 1 (Default --table=0):
+3. Download a specific book from table 1 (Default --table=0):
    Use the `--single` argument with the book number
+   
    `python pdf_book_download_from_zxxeducn.py --single 50`
 
-3. Download a limited number of books from table 2:
+5. Download a limited number of books from table 2:
    Use the `--limit` argument to specify how many books to download
+   
    `python pdf_book_download_from_zxxeducn.py --table 1 --limit 10`
 
-4. Resume interrupted download from table 3, item 6 (5 items have been downloaded):
+7. Resume interrupted download from table 3, item 6 (5 items have been downloaded):
    Use `--table` and `--item` to specify where to resume
+   
    `python pdf_book_download_from_zxxeducn.py --table 2 --item 5`
 
-5. Combine arguments:
+9. Combine arguments:
    You can combine different arguments for more specific control (e.g. download 10 books from table 3, start from item 6)
+   
    `python pdf_book_download_from_zxxeducn.py --table 2 --item 5 --limit 10`
 
 Note: 
