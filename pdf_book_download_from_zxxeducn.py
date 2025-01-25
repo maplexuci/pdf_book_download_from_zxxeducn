@@ -3,6 +3,8 @@ import json
 import os
 from pathlib import Path
 from urllib.parse import quote
+import argparse
+
 
 # Get user's home directory
 home = str(Path.home())
@@ -140,18 +142,52 @@ def pdf_download(table: int=0, item: int=0, single_book: int=None, download_limi
         t += 1
         item = 0
 
-# Example usage:
-# Download all books (original behavior)
-# pdf_download()
-
-# Download only book number 50
-# pdf_download(single_book=50)
-
-# Download 10 books starting from the beginning
-# pdf_download(download_limit=10)
-
-# Download 5 books starting from item 20
-# pdf_download(item=20, download_limit=5)
-
-# start download
-pdf_download(single_book=188)
+if __name__ == "__main__":
+    import argparse
+    
+    parser = argparse.ArgumentParser(
+        description='Download textbooks from the National Smart Education Platform (国家中小学智慧教育平台)',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''
+Examples:
+    # Download all books
+    python pdf_book_download_from_zxxeducn.py
+    
+    # Continue downloading from a specific point (e.g., from table 2, item 5),
+    # if you know 5 books from table 2 have been downloaded
+    python pdf_book_download_from_zxxeducn.py --table 1 --item 5
+    
+    # Download a single book (e.g., book number 50)
+    python pdf_book_download_from_zxxeducn.py --single 50
+    
+    # Download 10 books starting from the beginning
+    python pdf_book_download_from_zxxeducn.py --limit 10
+    
+    # Download 5 books starting from item 20 in table 3
+    python pdf_book_download_from_zxxeducn.py --table 2 --item 20 --limit 5
+    
+    # Replace python with python3 if you are using Python 3
+        '''
+    )
+    
+    parser.add_argument('--single', type=int, 
+                       help='Download only one specific book number')
+    
+    parser.add_argument('--limit', type=int, 
+                       help='Limit the number of books to download')
+    
+    parser.add_argument('--table', type=int, default=0,
+                       help='Start from specific table index (0-based)')
+    
+    parser.add_argument('--item', type=int, default=0,
+                       help='Start from specific item index (0-based)')
+    
+    args = parser.parse_args()
+    
+    # Call pdf_download with the parsed arguments
+    pdf_download(
+        table=args.table,
+        item=args.item,
+        single_book=args.single,
+        download_limit=args.limit
+    )
