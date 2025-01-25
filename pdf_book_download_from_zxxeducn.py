@@ -56,16 +56,18 @@ def get_pdf_url(book_id):
         print("Full traceback:")
         print(traceback.format_exc())
 
-def pdf_download(table: int=0, item: int=0):
+def pdf_download(table: int=0, item: int=0, single_book: int=None, download_limit: int=None):
     """
-    该程序从“国家中小学智慧教育平台”网站下载电子教材。
+    该程序从"国家中小学智慧教育平台"网站下载电子教材。
 
-    table:  Optional argument for the urls you want the download to continue, if the download is stopped in the middle. Value to pass should be the (current url value - 1), 
-            E.g., if the url that is using for download currently is 3, then you can pass value of 2 to this argument. There are 3 urls in total.
-    item:   Optional argument for the number of textbooks that has already download.
-            E.g., if you know 200 books have been downloaded, and you want to continue downloading without repeating downloading, then pass 200 to this argument.
+    Args:
+        table: Optional argument for the urls you want the download to continue, if the download is stopped in the middle.
+               Value to pass should be the (current url value - 1)
+        item: Optional argument for the number of textbooks that has already download.
+        single_book: Optional argument to download only one specific book number.
+        download_limit: Optional argument to limit how many books to download in this run.
 
-    If no value is passed to these arguments, the download will start from the beginning, which may result repetitive downloading.
+    If no value is passed to these arguments, the download will start from the beginning and download all books.
     """
     url = get_parts()
     
@@ -78,6 +80,9 @@ def pdf_download(table: int=0, item: int=0):
     }
 
     t = 0 + table
+    total_processed = 0
+    book_counter = item
+
     for ref in url[table:]:
         print(f"正在下载目录{t+1}/{len(url)}中的电子教材")
         response = requests.get(ref, headers=headers)
@@ -85,6 +90,18 @@ def pdf_download(table: int=0, item: int=0):
 
         c = 0 + item
         for i in info[item:]:
+            book_counter += 1
+            
+            # Skip if not the requested single book
+            if single_book is not None and book_counter != single_book:
+                c += 1
+                continue
+
+            # Check if we've reached the download limit
+            if download_limit is not None and total_processed >= download_limit:
+                print(f"已达到下载限制 ({download_limit} 本教材)")
+                return
+
             try:
                 book_id = i['id']
                 publisher = next((tag['tag_name'] for tag in i['tag_list'] if '版' in tag['tag_name']), '')
@@ -106,6 +123,7 @@ def pdf_download(table: int=0, item: int=0):
                         with open(file_path, 'wb') as f:
                             f.write(pdf_response.content)
                         print(f"当前目录下共有{len(info)}本电子教材, 已下载 {c+1}/{len(info)}")
+                        total_processed += 1
                     else:
                         print(f"Failed to download PDF for {book_name}: Status {pdf_response.status_code}")
                 else:
@@ -114,9 +132,26 @@ def pdf_download(table: int=0, item: int=0):
             except Exception as e:
                 print(f"Error processing {book_name}: {str(e)}")
             
+            # If we're downloading a single book and found it, we can return
+            if single_book is not None and book_counter == single_book:
+                return
+
             c += 1
         t += 1
         item = 0
 
+# Example usage:
+# Download all books (original behavior)
+# pdf_download()
+
+# Download only book number 50
+# pdf_download(single_book=50)
+
+# Download 10 books starting from the beginning
+# pdf_download(download_limit=10)
+
+# Download 5 books starting from item 20
+# pdf_download(item=20, download_limit=5)
+
 # start download
-pdf_download(table=0, item=0)
+pdf_download(single_book=188)
