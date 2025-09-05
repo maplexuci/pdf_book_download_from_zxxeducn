@@ -37,7 +37,9 @@ def save_textbook_info():
 
     # Prepare CSV file
     home = str(Path.home())
-    dir_path = os.path.join(home, "Downloads")
+    dir_path = os.path.join(home, "Downloads/textbook_info")
+    if not os.path.exists(dir_path):
+        os.makedirs(dir_path)
     csv_path = os.path.join(dir_path, "textbook_info.csv")
 
     book_number = 1  # Initialize book counter
