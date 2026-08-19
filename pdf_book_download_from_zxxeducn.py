@@ -2,25 +2,29 @@
 """
 Textbook Downloader for the National Smart Education Platform (国家中小学智慧教育平台)
 
-Downloads the freely published PDF textbooks from basic.smartedu.cn.
+Downloads the freely published textbook files from basic.smartedu.cn.
 
-Version: 3.1.0
+Version: 3.2.0
 
 How it works
 ------------
 1. `data_version.json` lists 4 catalog "part" files (~3700 books total).
 2. Each catalog entry has an `id` but an EMPTY `ti_items`, so the per-book
    details JSON must be fetched separately.
-3. The details JSON lists `ti_items`; the printable book is the item whose
-   `ti_format` is `pdf` (usually flag `source`, but for some materials
-   `source` is a .pptx and the PDF lives under flag `pdf`).
+3. The details JSON lists `ti_items`. The downloadable file is picked by
+   `ti_format`, not by `ti_file_flag`:
+     - 2833 books ship the book as a PDF under flag `source`
+     - 179 books (the 信息科技 lesson materials) ship a .pptx deck under
+       flag `source` and the same lesson as a PDF under flag `pdf`
+     - flags `image` / `thumbnail` are folders of page JPEGs, never a file
 4. `ti_storages` point at `*-ndr-private` hosts which return 401; rewriting
    the host to `*-ndr-oversea` makes them publicly fetchable.
 
-Some books (`download_policy: 2`, e.g. parts of the 体育与健康 series) have no
-public details JSON at all - the platform returns 403. Those are reported as
-restricted rather than silently failing; only page preview images are exposed
-for them and this script does not assemble those into a PDF.
+725 of the 3743 catalogued titles (`download_policy: 2`, e.g. the 体育与健康
+series) have no public details JSON at all - the platform returns 403. Those
+are reported as restricted rather than silently failing; only page preview
+images are exposed for them and this script does not assemble those into a
+document.
 """
 
 import argparse
@@ -28,9 +32,11 @@ import json
 import os
 import re
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 from urllib.parse import quote, urlsplit, urlunsplit
 
 import requests
@@ -59,11 +65,32 @@ HEADERS = {
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
 }
 
-# A real textbook PDF is never this small; anything smaller is an error page.
-MIN_PDF_BYTES = 20 * 1024
+# Downloadable asset kinds. `aliases` are the ti_format values that count as
+# this kind; `magic` are the leading bytes a valid file must start with.
+ASSET_KINDS: Dict[str, Dict[str, Any]] = {
+    "pdf": {
+        "aliases": {"pdf"},
+        "magic": (b"%PDF",),
+        "label": "PDF",
+    },
+    "pptx": {
+        # .pptx is a zip container, hence the PK signature.
+        "aliases": {"pptx", "ppt"},
+        "magic": (b"PK\x03\x04", b"PK\x05\x06", b"\xd0\xcf\x11\xe0"),
+        "label": "PowerPoint",
+    },
+}
+
+# When several items share a format, prefer the one filed under `source`.
+FLAG_PRIORITY = {"source": 0, "pdf": 1, "pptx": 1}
+
+# A real textbook file is never this small; anything smaller is an error page.
+MIN_ASSET_BYTES = 20 * 1024
 CHUNK_SIZE = 1 << 18  # 256 KiB
 
 OUTPUT_DIR = Path.home() / "Downloads" / "textbook_download"
+INDEX_PATH = OUTPUT_DIR / ".asset_index.json"
+INDEX_MAX_AGE = 7 * 24 * 3600  # refetch the asset index after a week
 
 SESSION = requests.Session()
 SESSION.headers.update(HEADERS)
@@ -71,10 +98,27 @@ SESSION.headers.update(HEADERS)
 # Populated on first use by get_catalog_parts().
 _CATALOG_PARTS: Optional[List[List[Dict[str, Any]]]] = None
 
+# One requests.Session per worker thread, for the concurrent index scan.
+_THREAD_LOCAL = threading.local()
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def thread_session() -> requests.Session:
+    """A per-thread session, so the index scan can run concurrently."""
+    session = getattr(_THREAD_LOCAL, "session", None)
+    if session is None:
+        session = requests.Session()
+        session.headers.update(HEADERS)
+        adapter = requests.adapters.HTTPAdapter(
+            pool_connections=4, pool_maxsize=4, max_retries=2
+        )
+        session.mount("https://", adapter)
+        _THREAD_LOCAL.session = session
+    return session
+
 
 def sanitize_filename(name: str) -> str:
     """Make a book title safe to use as a filename."""
@@ -101,6 +145,21 @@ def book_display_name(book: Dict[str, Any]) -> str:
         "",
     )
     return sanitize_filename(f"{publisher}{title}")
+
+
+def human_size(num_bytes: float) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if abs(num_bytes) < 1024 or unit == "GB":
+            return f"{num_bytes:.1f} {unit}"
+        num_bytes /= 1024
+    return f"{num_bytes:.1f} GB"
+
+
+def resolve_formats(spec: str) -> List[str]:
+    """Turn a --format value into an ordered list of asset kinds."""
+    if spec == "all":
+        return list(ASSET_KINDS)
+    return [spec]
 
 
 # ---------------------------------------------------------------------------
@@ -175,10 +234,12 @@ def get_book_by_sequence_number(
 
 
 # ---------------------------------------------------------------------------
-# PDF resolution
+# Asset resolution
 # ---------------------------------------------------------------------------
 
-def get_book_details(book_id: str) -> Tuple[Optional[Dict[str, Any]], str]:
+def get_book_details(
+    book_id: str, session: Optional[requests.Session] = None, quiet: bool = False
+) -> Tuple[Optional[Dict[str, Any]], str]:
     """
     Fetch a book's details JSON.
 
@@ -187,51 +248,61 @@ def get_book_details(book_id: str) -> Tuple[Optional[Dict[str, Any]], str]:
       'restricted' - platform refuses public access (HTTP 401/403)
       'error'      - network / parse failure
     """
+    session = session or SESSION
     last_status = "error"
     for host in DETAILS_HOSTS:
         url = f"https://{host}.ykt.cbern.com.cn" + DETAILS_PATH.format(book_id=book_id)
         try:
-            response = SESSION.get(url, timeout=30)
+            response = session.get(url, timeout=30)
         except requests.RequestException as exc:
-            print(f"    ❌ {host}: network error ({exc})")
+            if not quiet:
+                print(f"    ❌ {host}: network error ({exc})")
             continue
 
         if response.ok:
             try:
                 return response.json(), "ok"
             except json.JSONDecodeError:
-                print(f"    ❌ {host}: details response was not valid JSON")
+                if not quiet:
+                    print(f"    ❌ {host}: details response was not valid JSON")
                 continue
 
         if response.status_code in (401, 403):
             last_status = "restricted"
-        else:
+        elif not quiet:
             print(f"    ❌ {host}: details returned HTTP {response.status_code}")
 
     return None, last_status
 
 
-def pick_pdf_item(details: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def pick_asset(details: Dict[str, Any], kind: str) -> Optional[Dict[str, Any]]:
     """
-    Choose the PDF among a book's `ti_items`.
+    Choose the best `ti_items` entry of the given kind ('pdf' or 'pptx').
 
-    Selection is driven by `ti_format == 'pdf'`, NOT by `ti_file_flag`:
-      - most textbooks expose the book under flag 'source'
-      - some materials have a .pptx under 'source' and the PDF under 'pdf'
-      - flag 'image'/'thumbnail' are folders of page JPEGs, never a PDF
+    Selection is driven by `ti_format`, NOT by `ti_file_flag`:
+      - most textbooks expose the book as a PDF under flag 'source'
+      - the 信息科技 lesson materials have a .pptx under 'source' and the
+        matching PDF under flag 'pdf'
+      - flags 'image'/'thumbnail' are folders of page JPEGs, never a file
     """
-    pdf_items = [
+    aliases = ASSET_KINDS[kind]["aliases"]
+    candidates = [
         item
         for item in details.get("ti_items") or []
-        if (item.get("ti_format") or "").lower() == "pdf" and item.get("ti_storages")
+        if (item.get("ti_format") or "").lower() in aliases and item.get("ti_storages")
     ]
-    if not pdf_items:
+    if not candidates:
         return None
 
-    priority = {"source": 0, "pdf": 1}
-    pdf_items.sort(key=lambda i: (priority.get(i.get("ti_file_flag"), 9),
-                                  -(i.get("ti_size") or 0)))
-    return pdf_items[0]
+    candidates.sort(
+        key=lambda i: (FLAG_PRIORITY.get(i.get("ti_file_flag"), 9), -(i.get("ti_size") or 0))
+    )
+    return candidates[0]
+
+
+def available_kinds(details: Dict[str, Any]) -> List[str]:
+    """Which asset kinds this book actually publishes."""
+    return [kind for kind in ASSET_KINDS if pick_asset(details, kind)]
 
 
 def storages_to_public_urls(storages: List[str]) -> List[str]:
@@ -250,8 +321,8 @@ def storages_to_public_urls(storages: List[str]) -> List[str]:
     return urls
 
 
-def get_pdf_url(book_id: str) -> Optional[List[str]]:
-    """Return candidate PDF URLs for a book id, or None if it has no PDF."""
+def get_asset_urls(book_id: str, kind: str = "pdf") -> Optional[List[str]]:
+    """Return candidate download URLs of `kind` for a book id."""
     details, status = get_book_details(book_id)
     if details is None:
         if status == "restricted":
@@ -260,79 +331,177 @@ def get_pdf_url(book_id: str) -> Optional[List[str]]:
             print(f"❌ {book_id}: could not fetch details metadata")
         return None
 
-    item = pick_pdf_item(details)
+    item = pick_asset(details, kind)
     if item is None:
         formats = sorted(
             {(i.get("ti_file_flag"), i.get("ti_format")) for i in details.get("ti_items") or []}
         )
-        print(f"⚠️ {book_id}: no PDF among ti_items {formats or '[]'}")
+        print(f"⚠️ {book_id}: no {kind} among ti_items {formats or '[]'}")
         return None
 
     return storages_to_public_urls(item["ti_storages"])
+
+
+def get_pdf_url(book_id: str) -> Optional[List[str]]:
+    """Backwards-compatible alias for `get_asset_urls(book_id, 'pdf')`."""
+    return get_asset_urls(book_id, "pdf")
+
+
+# ---------------------------------------------------------------------------
+# Asset index (which books publish which formats)
+# ---------------------------------------------------------------------------
+
+def build_asset_index(workers: int = 12, refresh: bool = False) -> List[Dict[str, Any]]:
+    """
+    Probe every catalogued book's details JSON and record which formats it
+    publishes. Cached on disk because it costs ~3700 requests.
+    """
+    if not refresh and INDEX_PATH.exists():
+        try:
+            cached = json.loads(INDEX_PATH.read_text(encoding="utf-8"))
+            age = time.time() - cached.get("generated", 0)
+            if age < INDEX_MAX_AGE and cached.get("books"):
+                print(f"🗂️  Using cached asset index ({len(cached['books'])} books, "
+                      f"{age / 3600:.0f}h old; --refresh-index to rebuild)")
+                return cached["books"]
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    books = flat_catalog()
+    print(f"🔎 Scanning {len(books)} books for available formats "
+          f"({workers} workers, this takes a few minutes)...")
+
+    entries: List[Dict[str, Any]] = []
+    lock = threading.Lock()
+    counter = {"n": 0}
+
+    def probe(indexed: Tuple[int, Dict[str, Any]]) -> None:
+        seq, book = indexed
+        book_id = book.get("id", "")
+        details, status = get_book_details(book_id, session=thread_session(), quiet=True)
+        entry = {
+            "seq": seq,
+            "id": book_id,
+            "title": book_display_name(book),
+            "status": status,
+            "formats": {},
+        }
+        if details is not None:
+            for kind in ASSET_KINDS:
+                item = pick_asset(details, kind)
+                if item:
+                    entry["formats"][kind] = {
+                        "flag": item.get("ti_file_flag"),
+                        "size": item.get("ti_size") or 0,
+                    }
+        with lock:
+            entries.append(entry)
+            counter["n"] += 1
+            if counter["n"] % 500 == 0:
+                print(f"   • scanned {counter['n']}/{len(books)}")
+
+    with ThreadPoolExecutor(workers) as pool:
+        list(pool.map(probe, enumerate(books, 1)))
+
+    entries.sort(key=lambda e: e["seq"])
+    try:
+        INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
+        INDEX_PATH.write_text(
+            json.dumps({"generated": time.time(), "books": entries}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        print(f"💾 Asset index cached at {INDEX_PATH}")
+    except OSError as exc:
+        print(f"⚠️ Could not cache asset index: {exc}")
+
+    return entries
+
+
+def index_summary(entries: Sequence[Dict[str, Any]]) -> None:
+    total = len(entries)
+    restricted = sum(1 for e in entries if e["status"] == "restricted")
+    errored = sum(1 for e in entries if e["status"] == "error")
+    with_pdf = sum(1 for e in entries if "pdf" in e["formats"])
+    with_pptx = sum(1 for e in entries if "pptx" in e["formats"])
+    both = sum(1 for e in entries if {"pdf", "pptx"} <= set(e["formats"]))
+    print(f"\n📊 Catalog: {total} books")
+    print(f"   • PDF available        : {with_pdf}")
+    print(f"   • PowerPoint available : {with_pptx}  (of which {both} also have a PDF)")
+    print(f"   • restricted by platform: {restricted}")
+    if errored:
+        print(f"   • metadata unreachable  : {errored}")
+
+
+def books_with_format(entries: Sequence[Dict[str, Any]], kind: str) -> List[Dict[str, Any]]:
+    return [e for e in entries if kind in e["formats"]]
 
 
 # ---------------------------------------------------------------------------
 # Download
 # ---------------------------------------------------------------------------
 
-def download_pdf_with_cdn_fallback(
-    pdf_urls: List[str],
+def download_asset(
+    urls: List[str],
     book_name: str,
-    headers: Optional[Dict[str, str]] = None,
+    kind: str = "pdf",
     work_path: Optional[str] = None,
     overwrite: bool = False,
+    extension: Optional[str] = None,
 ) -> bool:
     """
-    Download a PDF, trying each CDN mirror in turn.
+    Download one asset, trying each CDN mirror in turn.
 
     Streams to a `.part` file and only renames it into place once the whole
-    body has arrived, so an interrupted run never leaves a truncated PDF that
-    looks complete. Validity is decided by the `%PDF` magic bytes and a size
-    floor - not by Content-Type alone, and not by a 1 MB minimum (real
-    textbook PDFs can be a few hundred KB).
+    body has arrived, so an interrupted run never leaves a truncated file
+    that looks complete. Validity is decided by the format's magic bytes and
+    Content-Length - not by Content-Type alone, and not by a size threshold
+    (real textbook files can be a few hundred KB).
     """
-    if not pdf_urls:
-        print(f"❌ No PDF URLs available for {book_name}")
+    if not urls:
+        print(f"❌ No {kind} URLs available for {book_name}")
         return False
 
+    magic = ASSET_KINDS[kind]["magic"]
+    suffix = extension or kind
     work_dir = Path(work_path) if work_path else OUTPUT_DIR
     work_dir.mkdir(parents=True, exist_ok=True)
-    final_path = work_dir / f"{sanitize_filename(book_name)}.pdf"
+    final_path = work_dir / f"{sanitize_filename(book_name)}.{suffix}"
 
     if final_path.exists() and not overwrite:
-        size_mb = final_path.stat().st_size / (1024 * 1024)
-        print(f"    ⏭️  Already downloaded ({size_mb:.1f} MB): {final_path.name}")
+        print(f"    ⏭️  Already downloaded ({human_size(final_path.stat().st_size)}): "
+              f"{final_path.name}")
         return True
 
-    for url in pdf_urls:
+    part_path = final_path.with_name(final_path.name + ".part")
+    for url in urls:
         mirror = urlsplit(url).netloc.split(".")[0]
-        part_path = final_path.with_suffix(".pdf.part")
         try:
-            with SESSION.get(url, headers=headers, timeout=(15, 120), stream=True) as response:
+            with SESSION.get(url, timeout=(15, 120), stream=True) as response:
                 if response.status_code != 200:
                     print(f"    ❌ {mirror}: HTTP {response.status_code}")
                     continue
 
                 expected = int(response.headers.get("content-length") or 0)
                 written = 0
-                first = b""
+                head = b""
                 with open(part_path, "wb") as handle:
                     for chunk in response.iter_content(CHUNK_SIZE):
                         if not chunk:
                             continue
                         if not written:
-                            first = chunk[:5]
-                            if not first.startswith(b"%PDF"):
-                                print(f"    ⚠️ {mirror}: not a PDF "
-                                      f"(content-type {response.headers.get('content-type')})")
+                            head = chunk[:8]
+                            if not head.startswith(magic):
+                                print(f"    ⚠️ {mirror}: not a valid {kind} "
+                                      f"(content-type "
+                                      f"{response.headers.get('content-type')})")
                                 break
                         handle.write(chunk)
                         written += len(chunk)
 
-                if not first.startswith(b"%PDF"):
+                if not head.startswith(magic):
                     part_path.unlink(missing_ok=True)
                     continue
-                if written < MIN_PDF_BYTES:
+                if written < MIN_ASSET_BYTES:
                     print(f"    ⚠️ {mirror}: implausibly small response ({written} bytes)")
                     part_path.unlink(missing_ok=True)
                     continue
@@ -342,7 +511,7 @@ def download_pdf_with_cdn_fallback(
                     continue
 
             part_path.replace(final_path)
-            print(f"    💾 Downloaded: {final_path.name}  {written / (1024 * 1024):.1f} MB")
+            print(f"    💾 Downloaded: {final_path.name}  {human_size(written)}")
             return True
 
         except requests.exceptions.Timeout:
@@ -356,17 +525,33 @@ def download_pdf_with_cdn_fallback(
             part_path.unlink(missing_ok=True)
             return False
 
-    print(f"❌ All CDN mirrors failed for {book_name}")
+    print(f"❌ All CDN mirrors failed for {book_name} ({kind})")
     return False
+
+
+def download_pdf_with_cdn_fallback(
+    pdf_urls: List[str],
+    book_name: str,
+    headers: Optional[Dict[str, str]] = None,
+    work_path: Optional[str] = None,
+    overwrite: bool = False,
+) -> bool:
+    """Backwards-compatible wrapper around `download_asset(..., 'pdf')`."""
+    return download_asset(pdf_urls, book_name, "pdf", work_path, overwrite)
 
 
 def download_book(
     book: Dict[str, Any],
     work_path: Path,
+    formats: Sequence[str] = ("pdf",),
     overwrite: bool = False,
     dry_run: bool = False,
-) -> Tuple[bool, str]:
-    """Resolve and download one catalog entry. Returns (ok, reason)."""
+) -> List[Tuple[str, bool, str]]:
+    """
+    Resolve and download the requested formats for one catalog entry.
+
+    Returns one (kind, ok, reason) tuple per requested format.
+    """
     name = book_display_name(book)
     book_id = book.get("id", "")
     print(f"📖 {name}")
@@ -375,25 +560,33 @@ def download_book(
     if details is None:
         if status == "restricted":
             print("    🔒 Not publicly downloadable (platform restricts this title)")
-            return False, "restricted by platform"
+            return [(kind, False, "restricted by platform") for kind in formats]
         print("    ❌ Could not fetch details metadata")
-        return False, "details unavailable"
+        return [(kind, False, "details unavailable") for kind in formats]
 
-    item = pick_pdf_item(details)
-    if item is None:
-        print("    ⚠️ No PDF file attached to this entry")
-        return False, "no PDF in metadata"
+    results: List[Tuple[str, bool, str]] = []
+    for kind in formats:
+        item = pick_asset(details, kind)
+        if item is None:
+            offered = available_kinds(details)
+            note = f"no {kind} published" + (f" (has: {', '.join(offered)})" if offered else "")
+            print(f"    ⚠️ {note}")
+            results.append((kind, False, note))
+            continue
 
-    urls = storages_to_public_urls(item["ti_storages"])
-    if dry_run:
-        size_mb = (item.get("ti_size") or 0) / (1024 * 1024)
-        print(f"    🔗 {urls[0]}")
-        print(f"    ℹ️  flag={item.get('ti_file_flag')} size={size_mb:.1f} MB (dry run)")
-        return True, "resolved"
+        urls = storages_to_public_urls(item["ti_storages"])
+        extension = (item.get("ti_format") or kind).lower()
+        if dry_run:
+            print(f"    🔗 [{kind}] {urls[0]}")
+            print(f"    ℹ️  flag={item.get('ti_file_flag')} "
+                  f"size={human_size(item.get('ti_size') or 0)} (dry run)")
+            results.append((kind, True, "resolved"))
+            continue
 
-    if download_pdf_with_cdn_fallback(urls, name, work_path=str(work_path), overwrite=overwrite):
-        return True, "ok"
-    return False, "download failed"
+        ok = download_asset(urls, name, kind, str(work_path), overwrite, extension)
+        results.append((kind, ok, "ok" if ok else "download failed"))
+
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -410,6 +603,10 @@ def _report(results: List[Tuple[str, bool, str]]) -> None:
             print(f"   • {name} - {reason}")
 
 
+def _label(book_name: str, kind: str, prefix: str = "") -> str:
+    return f"{prefix}{book_name} [{kind}]"
+
+
 def pdf_download(
     table: int = 0,
     item: int = 0,
@@ -420,10 +617,12 @@ def pdf_download(
     book_id: Optional[str] = None,
     overwrite: bool = False,
     dry_run: bool = False,
+    formats: Optional[Sequence[str]] = None,
+    all_pptx: bool = False,
+    list_format: Optional[str] = None,
+    refresh_index: bool = False,
 ) -> None:
     """Entry point dispatching to the requested download mode."""
-    print("🚀 Starting textbook download...")
-
     work_path = OUTPUT_DIR
     try:
         work_path.mkdir(parents=True, exist_ok=True)
@@ -431,15 +630,28 @@ def pdf_download(
         print(f"❌ Failed to create output directory {work_path}: {exc}")
         return
 
+    if list_format:
+        _list_mode(list_format, refresh_index)
+        return
+
+    print("🚀 Starting textbook download...")
+
+    if all_pptx:
+        _download_all_of_format("pptx", work_path, formats, overwrite, dry_run,
+                                download_limit, refresh_index)
+        print(f"📁 Files are in {work_path}")
+        return
+
+    formats = formats or ("pdf",)
     if book_id:
-        _download_by_book_id(book_id, work_path, overwrite, dry_run)
+        _download_by_book_id(book_id, work_path, formats, overwrite, dry_run)
     elif sequence_number is not None:
-        _download_by_sequence_number(sequence_number, work_path, overwrite, dry_run)
+        _download_by_sequence_number(sequence_number, work_path, formats, overwrite, dry_run)
     elif book_range:
-        _download_by_book_range(book_range, work_path, overwrite, dry_run)
+        _download_by_book_range(book_range, work_path, formats, overwrite, dry_run)
     elif single_book is not None or download_limit is not None or table > 0 or item > 0:
         _download_legacy_mode(table, item, single_book, download_limit,
-                              work_path, overwrite, dry_run)
+                              work_path, formats, overwrite, dry_run)
     else:
         print("❌ No download mode specified. Use --help to see available options.")
         return
@@ -447,7 +659,60 @@ def pdf_download(
     print(f"📁 Files are in {work_path}")
 
 
-def _download_by_book_id(book_id: str, work_path: Path,
+def _list_mode(kind: str, refresh_index: bool) -> None:
+    """Print every book that publishes the given format."""
+    entries = build_asset_index(refresh=refresh_index)
+    index_summary(entries)
+
+    matches = books_with_format(entries, kind)
+    total = sum(e["formats"][kind]["size"] for e in matches)
+    print(f"\n📄 {len(matches)} books publish a {ASSET_KINDS[kind]['label']} "
+          f"file ({human_size(total)} total):\n")
+    for entry in matches:
+        info = entry["formats"][kind]
+        others = ", ".join(k for k in entry["formats"] if k != kind)
+        extra = f"  (+{others})" if others else ""
+        print(f"  #{entry['seq']:<5d} {human_size(info['size']):>9s}  "
+              f"{entry['title'][:52]}{extra}")
+    if kind == "pptx":
+        print("\nDownload them all with: --all-pptx")
+
+
+def _download_all_of_format(
+    kind: str,
+    work_path: Path,
+    formats: Optional[Sequence[str]],
+    overwrite: bool,
+    dry_run: bool,
+    limit: Optional[int],
+    refresh_index: bool,
+) -> None:
+    """Dedicated route: download every book that publishes `kind`."""
+    entries = build_asset_index(refresh=refresh_index)
+    matches = books_with_format(entries, kind)
+    if limit:
+        matches = matches[:limit]
+
+    # Default to this route's own format; an explicit --format wins.
+    wanted = list(formats) if formats else [kind]
+    estimate = sum(
+        entry["formats"][k]["size"] for entry in matches for k in wanted if k in entry["formats"]
+    )
+    print(f"\n📦 {len(matches)} books publish a {ASSET_KINDS[kind]['label']} file; "
+          f"fetching {', '.join(wanted)} (~{human_size(estimate)})")
+
+    results: List[Tuple[str, bool, str]] = []
+    for position, entry in enumerate(matches, 1):
+        print(f"\n[{position}/{len(matches)}] #{entry['seq']}", end=" ")
+        book = {"id": entry["id"], "title": entry["title"]}
+        for asset_kind, ok, reason in download_book(book, work_path, wanted, overwrite, dry_run):
+            results.append((_label(entry["title"], asset_kind, f"#{entry['seq']} "), ok, reason))
+        if position != len(matches):
+            time.sleep(1)  # be polite to the CDN
+    _report(results)
+
+
+def _download_by_book_id(book_id: str, work_path: Path, formats: Sequence[str],
                          overwrite: bool, dry_run: bool) -> None:
     print(f"🔍 Book ID: {book_id}")
     details, status = get_book_details(book_id)
@@ -458,24 +723,25 @@ def _download_by_book_id(book_id: str, work_path: Path,
             print("❌ Could not fetch details metadata for this ID")
         return
 
-    # Details JSON carries the same title/tag fields as the catalog entry.
     details.setdefault("id", book_id)
-    ok, reason = download_book(details, work_path, overwrite, dry_run)
-    _report([(book_display_name(details), ok, reason)])
+    name = book_display_name(details)
+    results = download_book(details, work_path, formats, overwrite, dry_run)
+    _report([(_label(name, kind), ok, reason) for kind, ok, reason in results])
 
 
-def _download_by_sequence_number(sequence_number: int, work_path: Path,
+def _download_by_sequence_number(sequence_number: int, work_path: Path, formats: Sequence[str],
                                  overwrite: bool, dry_run: bool) -> None:
     print(f"🔍 Sequence number: {sequence_number}")
     book, catalog_index, position = get_book_by_sequence_number(None, sequence_number)
     if not book:
         return
     print(f"📍 Catalog {catalog_index + 1}, position {position + 1}")
-    ok, reason = download_book(book, work_path, overwrite, dry_run)
-    _report([(book_display_name(book), ok, reason)])
+    name = book_display_name(book)
+    results = download_book(book, work_path, formats, overwrite, dry_run)
+    _report([(_label(name, kind), ok, reason) for kind, ok, reason in results])
 
 
-def _download_by_book_range(book_range: str, work_path: Path,
+def _download_by_book_range(book_range: str, work_path: Path, formats: Sequence[str],
                             overwrite: bool, dry_run: bool) -> None:
     try:
         if "-" in book_range:
@@ -500,8 +766,9 @@ def _download_by_book_range(book_range: str, work_path: Path,
     results: List[Tuple[str, bool, str]] = []
     for offset, book in enumerate(books[start - 1:end], start):
         print(f"\n[{offset}/{end}]", end=" ")
-        ok, reason = download_book(book, work_path, overwrite, dry_run)
-        results.append((f"#{offset} {book_display_name(book)}", ok, reason))
+        name = book_display_name(book)
+        for kind, ok, reason in download_book(book, work_path, formats, overwrite, dry_run):
+            results.append((_label(name, kind, f"#{offset} "), ok, reason))
         if offset != end:
             time.sleep(1)  # be polite to the CDN
     _report(results)
@@ -509,10 +776,11 @@ def _download_by_book_range(book_range: str, work_path: Path,
 
 def _download_legacy_mode(table: int, item: int, single_book: Optional[int],
                           download_limit: Optional[int], work_path: Path,
-                          overwrite: bool, dry_run: bool) -> None:
+                          formats: Sequence[str], overwrite: bool, dry_run: bool) -> None:
     print("📚 Legacy catalog mode...")
     parts = get_catalog_parts()
     results: List[Tuple[str, bool, str]] = []
+    downloaded = 0
     counter = 0
     start_item = item
 
@@ -524,13 +792,15 @@ def _download_legacy_mode(table: int, item: int, single_book: Optional[int],
             counter += 1
             if single_book is not None and counter != single_book:
                 continue
-            if download_limit is not None and len(results) >= download_limit:
+            if download_limit is not None and downloaded >= download_limit:
                 print(f"已达到下载限制 ({download_limit} 本教材)")
                 _report(results)
                 return
 
-            ok, reason = download_book(book, work_path, overwrite, dry_run)
-            results.append((book_display_name(book), ok, reason))
+            name = book_display_name(book)
+            for kind, ok, reason in download_book(book, work_path, formats, overwrite, dry_run):
+                results.append((_label(name, kind), ok, reason))
+            downloaded += 1
 
             if single_book is not None:
                 _report(results)
@@ -549,7 +819,7 @@ def _download_legacy_mode(table: int, item: int, single_book: Optional[int],
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Download PDF textbooks from the National Smart Education Platform "
+            "Download textbooks from the National Smart Education Platform "
             "(国家中小学智慧教育平台). Files are saved to ~/Downloads/textbook_download/."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -558,43 +828,72 @@ DOWNLOAD MODES
   --sequence N     the Nth book across all catalogs (1-based)
   --range A-B      books A through B (also accepts a single number)
   --book-id UUID   one book by its platform id
+  --all-pptx       every book that publishes a PowerPoint deck (179 of them)
   --single N       legacy: only the Nth book encountered
-  --limit N        legacy: stop after N successful downloads
+  --limit N        legacy: stop after N books (also caps --all-pptx)
   --table N        legacy: start at catalog N (0-based)
   --item N         legacy: start at item N within the first catalog (0-based)
 
+FORMATS
+  --format pdf     PDF only (default)
+  --format pptx    PowerPoint only
+  --format all     every format the book publishes
+
+  Of the 3743 catalogued titles, 3012 publish a PDF and 179 (the 信息科技
+  lesson materials) publish a .pptx deck under flag `source` alongside a PDF
+  under flag `pdf`. `--format` works with every mode above.
+
+LISTING
+  --list-pptx      list the books that publish a PowerPoint deck
+  --list-pdf       list the books that publish a PDF
+  --refresh-index  rebuild the cached format index (~3700 requests)
+
 OPTIONS
-  --dry-run        resolve and print the PDF URL without downloading
-  --overwrite      re-download books that already exist locally
+  --dry-run        resolve and print the download URL without downloading
+  --overwrite      re-download files that already exist locally
 
 EXAMPLES
   python pdf_book_download_from_zxxeducn.py --sequence 1
   python pdf_book_download_from_zxxeducn.py --range 1-5
-  python pdf_book_download_from_zxxeducn.py --book-id bdc00134-465d-454b-a541-dcd0cec4d86e
-  python pdf_book_download_from_zxxeducn.py --range 1-20 --dry-run
+  python pdf_book_download_from_zxxeducn.py --list-pptx
+  python pdf_book_download_from_zxxeducn.py --all-pptx
+  python pdf_book_download_from_zxxeducn.py --all-pptx --format all --limit 5
+  python pdf_book_download_from_zxxeducn.py --sequence 1981 --format pptx
 
 NOTES
-  A minority of titles (e.g. parts of the 体育与健康 series) are marked
+  725 catalogued titles (e.g. the 体育与健康 series) are marked
   download-restricted by the platform: their details metadata returns HTTP 403
-  and no PDF is published. Those are reported as restricted and skipped.
+  and no file is published. Those are reported as restricted and skipped.
 """,
     )
     parser.add_argument("--sequence", type=int, help="Download by global sequence number")
     parser.add_argument("--range", type=str, help='Download a range, e.g. "200-250"')
     parser.add_argument("--book-id", type=str, help="Download by platform book id (UUID)")
+    parser.add_argument("--all-pptx", action="store_true",
+                        help="Download every book that publishes a PowerPoint deck")
     parser.add_argument("--single", type=int, help="Legacy: download only book number N")
-    parser.add_argument("--limit", type=int, help="Legacy: stop after N downloads")
+    parser.add_argument("--limit", type=int, help="Legacy: stop after N books")
     parser.add_argument("--table", type=int, default=0, help="Legacy: starting catalog index")
     parser.add_argument("--item", type=int, default=0, help="Legacy: starting item index")
+    parser.add_argument("--format", choices=("pdf", "pptx", "all"), default=None,
+                        help="Which file format(s) to download "
+                             "(default: pdf, or pptx for --all-pptx)")
+    parser.add_argument("--list-pptx", action="store_true",
+                        help="List books that publish a PowerPoint deck, then exit")
+    parser.add_argument("--list-pdf", action="store_true",
+                        help="List books that publish a PDF, then exit")
+    parser.add_argument("--refresh-index", action="store_true",
+                        help="Rebuild the cached format index")
     parser.add_argument("--overwrite", action="store_true",
-                        help="Re-download books that already exist locally")
+                        help="Re-download files that already exist locally")
     parser.add_argument("--dry-run", action="store_true",
-                        help="Resolve the PDF URL without downloading")
+                        help="Resolve the download URL without downloading")
     return parser
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     args = build_parser().parse_args(argv)
+    list_format = "pptx" if args.list_pptx else ("pdf" if args.list_pdf else None)
     try:
         pdf_download(
             table=args.table,
@@ -606,6 +905,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             book_id=args.book_id,
             overwrite=args.overwrite,
             dry_run=args.dry_run,
+            formats=resolve_formats(args.format) if args.format else None,
+            all_pptx=args.all_pptx,
+            list_format=list_format,
+            refresh_index=args.refresh_index,
         )
     except KeyboardInterrupt:
         print("\n⏹️  Interrupted by user")

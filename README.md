@@ -49,14 +49,47 @@ python pdf_book_download_from_zxxeducn.py --book-id "bdc00134-465d-454b-a541-dcd
 - `--table N`: Start from catalog N (0-based indexing)
 - `--item N`: Start from item N within the catalog (0-based indexing)
 
+#### 5. **PowerPoint Materials** (`--all-pptx`)
+179 of the catalogued titles - the 信息科技 lesson materials - publish a `.pptx` deck under
+flag `source` alongside a PDF under flag `pdf`. They have a dedicated route:
+```bash
+python pdf_book_download_from_zxxeducn.py --list-pptx          # list all 179 (1.5 GB total)
+python pdf_book_download_from_zxxeducn.py --all-pptx           # download every deck
+python pdf_book_download_from_zxxeducn.py --all-pptx --format all --limit 5
+```
+
+#### Formats
+`--format` works with every mode above:
+- `--format pdf`: PDF only (default)
+- `--format pptx`: PowerPoint only
+- `--format all`: every format the book publishes
+
+```bash
+python pdf_book_download_from_zxxeducn.py --sequence 1981 --format pptx
+```
+
+#### Listing
+- `--list-pptx`: list the books that publish a PowerPoint deck
+- `--list-pdf`: list the books that publish a PDF
+- `--refresh-index`: rebuild the cached format index (~3700 requests, cached for 7 days)
+
 #### Options
-- `--dry-run`: Resolve and print the PDF URL without downloading
-- `--overwrite`: Re-download books that already exist locally
+- `--dry-run`: Resolve and print the download URL without downloading
+- `--overwrite`: Re-download files that already exist locally
+
+#### What the catalog contains
+Surveyed across all 3743 catalogued titles:
+
+| | Count |
+|---|---|
+| PDF available | 3012 |
+| PowerPoint available | 179 (all 179 also have a PDF) |
+| Restricted by the platform | 725 |
 
 #### Restricted Titles
-A minority of titles (e.g. parts of the 体育与健康 series) are marked download-restricted by the
-platform: their details metadata returns HTTP 403 and no PDF is published. The script reports
-these as restricted and skips them.
+725 titles (e.g. the 体育与健康 series) are marked download-restricted by the platform: their
+details metadata returns HTTP 403 and no file is published. The script reports these as
+restricted and skips them.
 
 ### 📋 Requirements
 
@@ -198,13 +231,46 @@ python pdf_book_download_from_zxxeducn.py --book-id "bdc00134-465d-454b-a541-dcd
 - `--table N`: 从目录N开始（基于0的索引）
 - `--item N`: 从目录中的项目N开始（基于0的索引）
 
+#### 5. **PowerPoint 课件** (`--all-pptx`)
+目录中有 179 个资源（信息科技课程课件）在 `source` 标记下提供 `.pptx` 课件，
+同时在 `pdf` 标记下提供对应 PDF。这类内容有独立的下载通道：
+```bash
+python pdf_book_download_from_zxxeducn.py --list-pptx          # 列出全部 179 个（共约 1.5 GB）
+python pdf_book_download_from_zxxeducn.py --all-pptx           # 下载全部课件
+python pdf_book_download_from_zxxeducn.py --all-pptx --format all --limit 5
+```
+
+#### 文件格式
+`--format` 适用于以上所有模式：
+- `--format pdf`: 仅 PDF（默认）
+- `--format pptx`: 仅 PowerPoint
+- `--format all`: 该资源发布的所有格式
+
+```bash
+python pdf_book_download_from_zxxeducn.py --sequence 1981 --format pptx
+```
+
+#### 列表查询
+- `--list-pptx`: 列出提供 PowerPoint 课件的资源
+- `--list-pdf`: 列出提供 PDF 的资源
+- `--refresh-index`: 重建格式索引缓存（约 3700 次请求，缓存 7 天）
+
 #### 可选参数
-- `--dry-run`: 仅解析并打印 PDF 链接，不实际下载
-- `--overwrite`: 重新下载本地已存在的书籍
+- `--dry-run`: 仅解析并打印下载链接，不实际下载
+- `--overwrite`: 重新下载本地已存在的文件
+
+#### 目录内容统计
+对全部 3743 个资源的完整扫描结果：
+
+| | 数量 |
+|---|---|
+| 提供 PDF | 3012 |
+| 提供 PowerPoint | 179（全部同时提供 PDF） |
+| 平台限制下载 | 725 |
 
 #### 受限资源
-少部分资源（如部分体育与健康系列）被平台标记为不可下载：其详情接口返回 HTTP 403，
-且未发布 PDF。脚本会将其标记为受限并跳过。
+725 个资源（如体育与健康系列）被平台标记为不可下载：其详情接口返回 HTTP 403，
+且未发布文件。脚本会将其标记为受限并跳过。
 
 ### 📋 系统要求
 
