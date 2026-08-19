@@ -49,6 +49,15 @@ python pdf_book_download_from_zxxeducn.py --book-id "bdc00134-465d-454b-a541-dcd
 - `--table N`: Start from catalog N (0-based indexing)
 - `--item N`: Start from item N within the catalog (0-based indexing)
 
+#### Options
+- `--dry-run`: Resolve and print the PDF URL without downloading
+- `--overwrite`: Re-download books that already exist locally
+
+#### Restricted Titles
+A minority of titles (e.g. parts of the 体育与健康 series) are marked download-restricted by the
+platform: their details metadata returns HTTP 403 and no PDF is published. The script reports
+these as restricted and skips them.
+
 ### 📋 Requirements
 
 - Python 3.6+
@@ -89,7 +98,10 @@ python pdf_book_download_from_zxxeducn.py --table 1 --item 5
 ### 🔧 Technical Details
 
 - **CDN Endpoints**: Automatically tries r1-ndr-oversea, r2-ndr-oversea, and r3-ndr-oversea in sequence
-- **File Validation**: Downloads are validated to ensure they are actual PDF files (>1MB)
+- **PDF Detection**: The PDF is chosen by `ti_format == "pdf"` (usually flag `source`, but some
+  materials keep a `.pptx` under `source` and the PDF under flag `pdf`)
+- **File Validation**: Validated by `%PDF` magic bytes and Content-Length, not by size guessing
+- **Safe Writes**: Streamed to a `.pdf.part` file and renamed only when complete
 - **Network Timeouts**: 30-second timeout for all network requests
 - **Output Directory**: All downloads are saved to `~/Downloads/textbook_download/`
 
@@ -186,6 +198,14 @@ python pdf_book_download_from_zxxeducn.py --book-id "bdc00134-465d-454b-a541-dcd
 - `--table N`: 从目录N开始（基于0的索引）
 - `--item N`: 从目录中的项目N开始（基于0的索引）
 
+#### 可选参数
+- `--dry-run`: 仅解析并打印 PDF 链接，不实际下载
+- `--overwrite`: 重新下载本地已存在的书籍
+
+#### 受限资源
+少部分资源（如部分体育与健康系列）被平台标记为不可下载：其详情接口返回 HTTP 403，
+且未发布 PDF。脚本会将其标记为受限并跳过。
+
 ### 📋 系统要求
 
 - Python 3.6+
@@ -226,7 +246,10 @@ python pdf_book_download_from_zxxeducn.py --table 1 --item 5
 ### 🔧 技术细节
 
 - **CDN端点**: 自动按顺序尝试r1-ndr-oversea、r2-ndr-oversea和r3-ndr-oversea
-- **文件验证**: 验证下载内容确保是实际的PDF文件（>1MB）
+- **PDF 定位**: 依据 `ti_format == "pdf"` 选取（通常为 `source`，但部分资源的 `source` 是 .pptx，
+  真正的 PDF 位于 `pdf` 标记下）
+- **文件验证**: 通过 `%PDF` 文件头和 Content-Length 校验，而非依赖文件大小
+- **安全写入**: 先流式写入 `.pdf.part`，完整下载后才重命名
 - **网络超时**: 所有网络请求30秒超时
 - **输出目录**: 所有下载保存到`~/Downloads/textbook_download/`
 
