@@ -89,7 +89,26 @@ MIN_ASSET_BYTES = 20 * 1024
 CHUNK_SIZE = 1 << 18  # 256 KiB
 
 OUTPUT_DIR = Path.home() / "Downloads" / "textbook_download"
-INDEX_PATH = OUTPUT_DIR / ".asset_index.json"
+
+
+def cache_dir() -> Path:
+    """
+    Where derived state lives.
+
+    Deliberately NOT inside OUTPUT_DIR: the index is app state, not a
+    download, and clearing out downloaded books should not cost a full
+    re-scan of the catalogue.
+    """
+    if sys.platform == "darwin":
+        base = Path.home() / "Library" / "Caches"
+    else:
+        base = Path(os.environ.get("XDG_CACHE_HOME") or (Path.home() / ".cache"))
+    return base / "textbook-downloader"
+
+
+CACHE_DIR = cache_dir()
+INDEX_PATH = CACHE_DIR / "asset_index.json"
+LEGACY_INDEX_PATH = OUTPUT_DIR / ".asset_index.json"
 INDEX_MAX_AGE = 7 * 24 * 3600  # refetch the asset index after a week
 
 SESSION = requests.Session()
@@ -356,9 +375,10 @@ def build_asset_index(workers: int = 12, refresh: bool = False) -> List[Dict[str
     Probe every catalogued book's details JSON and record which formats it
     publishes. Cached on disk because it costs ~3700 requests.
     """
-    if not refresh and INDEX_PATH.exists():
+    source = INDEX_PATH if INDEX_PATH.exists() else LEGACY_INDEX_PATH
+    if not refresh and source.exists():
         try:
-            cached = json.loads(INDEX_PATH.read_text(encoding="utf-8"))
+            cached = json.loads(source.read_text(encoding="utf-8"))
             age = time.time() - cached.get("generated", 0)
             if age < INDEX_MAX_AGE and cached.get("books"):
                 print(f"🗂️  Using cached asset index ({len(cached['books'])} books, "

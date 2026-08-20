@@ -146,6 +146,8 @@ python3 pdf_book_download_from_zxxeducn.py --sequence 1981 --format pptx
 - `--list-pptx`: list the books that publish a PowerPoint deck
 - `--list-pdf`: list the books that publish a PDF
 - `--refresh-index`: rebuild the cached format index (~3700 requests, cached for 7 days)
+  in `~/Library/Caches/textbook-downloader/` (macOS) or `~/.cache/textbook-downloader/`,
+  deliberately outside the downloads folder so clearing downloads does not force a rescan
 
 See [Companion Script: textbook_info.py](#-companion-script-textbook_infopy) for a CSV
 inventory of which books offer which formats.
@@ -373,7 +375,9 @@ python3 pdf_book_download_from_zxxeducn.py --sequence 1981 --format pptx
 #### 列表查询
 - `--list-pptx`: 列出提供 PowerPoint 课件的资源
 - `--list-pdf`: 列出提供 PDF 的资源
-- `--refresh-index`: 重建格式索引缓存（约 3700 次请求，缓存 7 天）
+- `--refresh-index`: 重建格式索引缓存（约 3700 次请求，缓存 7 天）；
+  缓存位于 `~/Library/Caches/textbook-downloader/`（macOS）或 `~/.cache/textbook-downloader/`，
+  刻意放在下载目录之外，因此清理下载文件不会导致重新扫描
 
 各资源提供哪些格式，请参见 [配套脚本：textbook_info.py](#-配套脚本textbook_infopy) 导出的 CSV 清单。
 

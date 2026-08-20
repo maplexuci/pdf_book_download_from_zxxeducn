@@ -45,7 +45,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import pdf_book_download_from_zxxeducn as dl  # noqa: E402
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
-WEB_INDEX_PATH = dl.OUTPUT_DIR / ".web_index.json"
+WEB_INDEX_PATH = dl.CACHE_DIR / "web_index.json"
 WEB_INDEX_MAX_AGE = 7 * 24 * 3600
 
 # Platform tag dimensions, in the order the UI cascades them.
@@ -83,6 +83,13 @@ def _tags_for(book: Dict[str, Any]) -> Dict[str, List[str]]:
         for key, _, wanted in DIMENSIONS:
             if dim_id == wanted and name not in grouped[key]:
                 grouped[key].append(name)
+
+    # 241 特殊教育 titles (聋校 / 培智) are tagged with BOTH 特殊教育 and the
+    # grade-level 学段 they correspond to, which would otherwise surface
+    # subjects like 律动 under 小学. The platform lists them under 特殊教育
+    # only, so that tag wins. 学段 is the sole dimension ever multi-valued.
+    if len(grouped["stage"]) > 1 and "特殊教育" in grouped["stage"]:
+        grouped["stage"] = ["特殊教育"]
     return grouped
 
 
