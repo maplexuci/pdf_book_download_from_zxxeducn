@@ -36,7 +36,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 from urllib.parse import quote, urlsplit, urlunsplit
 
 import requests
@@ -447,6 +447,9 @@ def download_asset(
     work_path: Optional[str] = None,
     overwrite: bool = False,
     extension: Optional[str] = None,
+    progress: Optional[Callable[[int, int], None]] = None,
+    cancelled: Optional[Callable[[], bool]] = None,
+    quiet: bool = False,
 ) -> bool:
     """
     Download one asset, trying each CDN mirror in turn.
@@ -456,11 +459,16 @@ def download_asset(
     that looks complete. Validity is decided by the format's magic bytes and
     Content-Length - not by Content-Type alone, and not by a size threshold
     (real textbook files can be a few hundred KB).
+
+    `progress(written, expected)` is called as bytes arrive and `cancelled()`
+    is polled to abort mid-stream, so a UI can drive this directly; `quiet`
+    suppresses the CLI prints.
     """
     if not urls:
-        print(f"❌ No {kind} URLs available for {book_name}")
+        say(f"❌ No {kind} URLs available for {book_name}")
         return False
 
+    say = (lambda *a, **k: None) if quiet else print
     magic = ASSET_KINDS[kind]["magic"]
     suffix = extension or kind
     work_dir = Path(work_path) if work_path else OUTPUT_DIR
@@ -468,7 +476,7 @@ def download_asset(
     final_path = work_dir / f"{sanitize_filename(book_name)}.{suffix}"
 
     if final_path.exists() and not overwrite:
-        print(f"    ⏭️  Already downloaded ({human_size(final_path.stat().st_size)}): "
+        say(f"    ⏭️  Already downloaded ({human_size(final_path.stat().st_size)}): "
               f"{final_path.name}")
         return True
 
@@ -478,7 +486,7 @@ def download_asset(
         try:
             with SESSION.get(url, timeout=(15, 120), stream=True) as response:
                 if response.status_code != 200:
-                    print(f"    ❌ {mirror}: HTTP {response.status_code}")
+                    say(f"    ❌ {mirror}: HTTP {response.status_code}")
                     continue
 
                 expected = int(response.headers.get("content-length") or 0)
@@ -491,41 +499,47 @@ def download_asset(
                         if not written:
                             head = chunk[:8]
                             if not head.startswith(magic):
-                                print(f"    ⚠️ {mirror}: not a valid {kind} "
+                                say(f"    ⚠️ {mirror}: not a valid {kind} "
                                       f"(content-type "
                                       f"{response.headers.get('content-type')})")
                                 break
                         handle.write(chunk)
                         written += len(chunk)
+                        if progress:
+                            progress(written, expected)
+                        if cancelled and cancelled():
+                            say(f"    ⏹️  {mirror}: cancelled")
+                            part_path.unlink(missing_ok=True)
+                            return False
 
                 if not head.startswith(magic):
                     part_path.unlink(missing_ok=True)
                     continue
                 if written < MIN_ASSET_BYTES:
-                    print(f"    ⚠️ {mirror}: implausibly small response ({written} bytes)")
+                    say(f"    ⚠️ {mirror}: implausibly small response ({written} bytes)")
                     part_path.unlink(missing_ok=True)
                     continue
                 if expected and written < expected:
-                    print(f"    ⚠️ {mirror}: truncated ({written}/{expected} bytes)")
+                    say(f"    ⚠️ {mirror}: truncated ({written}/{expected} bytes)")
                     part_path.unlink(missing_ok=True)
                     continue
 
             part_path.replace(final_path)
-            print(f"    💾 Downloaded: {final_path.name}  {human_size(written)}")
+            say(f"    💾 Downloaded: {final_path.name}  {human_size(written)}")
             return True
 
         except requests.exceptions.Timeout:
-            print(f"    ⏰ {mirror}: timed out")
+            say(f"    ⏰ {mirror}: timed out")
             part_path.unlink(missing_ok=True)
         except requests.exceptions.RequestException as exc:
-            print(f"    ❌ {mirror}: network error ({exc})")
+            say(f"    ❌ {mirror}: network error ({exc})")
             part_path.unlink(missing_ok=True)
         except OSError as exc:
-            print(f"    ❌ Failed writing {part_path.name}: {exc}")
+            say(f"    ❌ Failed writing {part_path.name}: {exc}")
             part_path.unlink(missing_ok=True)
             return False
 
-    print(f"❌ All CDN mirrors failed for {book_name} ({kind})")
+    say(f"❌ All CDN mirrors failed for {book_name} ({kind})")
     return False
 
 

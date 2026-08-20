@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>教材下载器</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <h1>教材下载器</h1>
+    <span class="sub">国家中小学智慧教育平台 · 电子教材</span>
+  </div>
+  <div class="topbar-right">
+    <span id="status" class="status">正在载入目录…</span>
+    <button id="reindex" class="ghost" title="重新扫描全部资源的可用格式（约需数分钟）">重建索引</button>
+  </div>
+</header>
+
+<main>
+  <section class="filters" id="filters">
+    <div class="filter-row" id="dimension-filters"></div>
+    <div class="filter-row secondary">
+      <label class="field">
+        <span>格式</span>
+        <select id="fmt">
+          <option value="">全部</option>
+          <option value="pdf">PDF</option>
+          <option value="pptx">PowerPoint 课件</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>可下载性</span>
+        <select id="availability">
+          <option value="">全部</option>
+          <option value="public">可下载</option>
+          <option value="restricted">平台限制</option>
+        </select>
+      </label>
+      <label class="field grow">
+        <span>搜索书名</span>
+        <input id="q" type="search" placeholder="例如：道德与法治　一年级">
+      </label>
+      <button id="reset" class="ghost">清除筛选</button>
+    </div>
+  </section>
+
+  <section class="results">
+    <div class="results-head">
+      <div>
+        <strong id="count">—</strong> 个资源
+        <span id="selection-info" class="muted"></span>
+      </div>
+      <div class="bulk">
+        <label class="inline"><input type="checkbox" id="select-page"> 选中本页</label>
+        <select id="bulk-format">
+          <option value="pdf">PDF</option>
+          <option value="pptx">PowerPoint 课件</option>
+          <option value="all">全部格式</option>
+        </select>
+        <button id="bulk-download" class="primary" disabled>批量下载</button>
+      </div>
+    </div>
+
+    <table class="grid">
+      <thead>
+        <tr>
+          <th class="c-check"></th>
+          <th class="c-seq">序号</th>
+          <th>名称</th>
+          <th class="c-tags">分类</th>
+          <th class="c-files">可用文件</th>
+          <th class="c-act">下载</th>
+        </tr>
+      </thead>
+      <tbody id="rows">
+        <tr><td colspan="6" class="empty">正在载入…</td></tr>
+      </tbody>
+    </table>
+
+    <div class="pager">
+      <button id="prev" class="ghost">上一页</button>
+      <span id="page-info" class="muted"></span>
+      <button id="next" class="ghost">下一页</button>
+    </div>
+  </section>
+
+  <section class="jobs" id="jobs-panel" hidden>
+    <h2>下载任务</h2>
+    <div id="jobs"></div>
+    <p class="muted small">文件保存在服务器本机的下载目录：<code id="outdir"></code></p>
+  </section>
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

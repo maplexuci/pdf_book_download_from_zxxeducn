@@ -48,6 +48,30 @@ deck from one the platform blocks outright (`restricted by platform`).
 Both scripts share the same cached format index (7 days; `--refresh-index` rebuilds it), so
 whichever you run first pays the one-time scan cost.
 
+### 🌐 Web Interface
+
+A local web UI wraps the same downloader with browsing, filtering and bulk downloads:
+
+```bash
+python webapp/server.py          # then open http://127.0.0.1:8000
+```
+
+It needs no extra packages - standard library plus the `requests` the CLI already uses.
+
+- **Cascading filters** using the platform's own tag dimensions: 学段 → 学科 → 版本 → 年级 → 册次,
+  each option showing how many books it would yield, plus format, availability and title search.
+- **Single downloads** stream through the server so the file keeps its proper 出版社+书名 name.
+- **Bulk downloads** run as background jobs (2 at a time, 1 s apart) writing into the same
+  `~/Downloads/textbook_download/` folder, with live progress over SSE and a cancel button.
+- The interface is in Simplified Chinese; the ~17% of books with no tags stay reachable through
+  each filter's 未标注 option.
+
+**This is a local tool.** It binds to `127.0.0.1` and has no authentication or rate limiting.
+Before exposing it to a network, note that every download would flow through that machine's
+bandwidth and all CDN requests would originate from one IP; a public deployment would also make
+it a redistribution point for the whole corpus, which is a different act from downloading for
+personal use.
+
 ### ✨ Features
 
 - **Multiple Download Modes**: Sequence number, book range, book ID, and legacy catalog-based approaches
@@ -243,6 +267,27 @@ python pdf_book_download_from_zxxeducn.py --sequence 1981 --format pptx
 两个脚本共用同一份格式索引缓存（7 天；`--refresh-index` 可重建），
 因此先运行哪个都可以，一次扫描的开销只需付出一次。
 
+### 🌐 网页界面
+
+配套的本地网页界面在同一套下载逻辑之上提供浏览、筛选与批量下载：
+
+```bash
+python webapp/server.py          # 然后打开 http://127.0.0.1:8000
+```
+
+无需安装额外依赖——仅使用标准库以及命令行脚本已经依赖的 `requests`。
+
+- **级联筛选**，直接采用平台自身的标签维度：学段 → 学科 → 版本 → 年级 → 册次，
+  每个选项都会显示对应的资源数量，另有格式、可下载性与书名搜索。
+- **单个下载**经由服务器转发，因此文件名会保留完整的"出版社+书名"。
+- **批量下载**以后台任务运行（同时 2 个、间隔 1 秒），保存至相同的
+  `~/Downloads/textbook_download/` 目录，并通过 SSE 实时显示进度，可随时取消。
+- 界面为简体中文；约 17% 没有标签的资源可通过各筛选项中的"未标注"继续访问。
+
+**这是一个本地工具。** 它仅监听 `127.0.0.1`，没有任何鉴权与限流。
+若要对外提供访问，请注意：所有下载流量都会经过该主机的带宽，且全部 CDN 请求都来自同一个 IP；
+公开部署还会使其成为整个资源库的再分发点，这与个人下载的性质并不相同。
+
 ### ✨ 功能特点
 
 - **多种下载模式**: 序列号、书籍范围、书籍ID和传统目录方式
@@ -396,6 +441,7 @@ python pdf_book_download_from_zxxeducn.py --table 1 --item 5
 
 ## 🔄 Version History
 
+- **v3.3.0**: Added a local web interface (`webapp/`) with cascading 学段/学科/版本/年级/册次 filters, streamed single downloads and background bulk jobs
 - **v3.2.0**: Added the PowerPoint (`.pptx`) download route (`--all-pptx`, `--format`, `--list-pptx`), and rebuilt `textbook_info.py` to record per-book PDF/PPTX availability
 - **v3.1.0**: Fixed PDF resolution against the platform's current metadata (select by `ti_format`, magic-byte validation, cached catalogue, streamed writes)
 - **v3.0.0**: Modified the download path and added more download mods. Enhanced documentation, type hints, and modular architecture
