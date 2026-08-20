@@ -10,6 +10,44 @@
 
 This enhanced script downloads complete PDF textbooks from the Chinese National Smart Education Platform (国家中小学智慧教育平台) with multiple download modes, comprehensive error handling, and flexible download controls.
 
+### 📊 Companion Script: textbook_info.py
+
+**Start here.** `textbook_info.py` builds a CSV inventory of the whole catalogue - one row
+per book - and it is what gives every book the **sequence number** that the download modes
+below refer to.
+
+This step exists because the catalogue files the platform publishes carry an empty
+`ti_items`: neither a book's position nor its available formats are knowable until that
+book's own details JSON is fetched. `textbook_info.py` does that once for all 3743 books
+and caches the result.
+
+```bash
+python textbook_info.py                 # full catalogue
+python textbook_info.py --pptx-only     # only books with a PowerPoint deck
+```
+
+Written to `~/Downloads/textbook_info/textbook_info.csv`:
+
+| Number | Book ID | Book Name | Has PDF | Has PPTX | PDF Size (MB) | PPTX Size (MB) | Availability |
+|---|---|---|---|---|---|---|---|
+| 1 | bdc00134-... | 统编版...道德与法治一年级上册 | yes | no | 48.2 | | public |
+| 1981 | 6890be8d-... | 第5课 美化处理图片 | yes | yes | 4.6 | 35.1 | public |
+| 2262 | a826f33f-... | 沪教版...体育与健康 一年级（全一册） | no | no | | | restricted by platform |
+
+**`Number` is the sequence number** taken by `--sequence` and `--range`. Find the row you
+want, then pass its Number:
+
+```bash
+python pdf_book_download_from_zxxeducn.py --sequence 1981 --format pptx
+```
+
+The remaining columns tell you what to expect before committing to a download: `Has PDF` /
+`Has PPTX` with their sizes, and `Availability`, which separates a book that merely has no
+deck from one the platform blocks outright (`restricted by platform`).
+
+Both scripts share the same cached format index (7 days; `--refresh-index` rebuilds it), so
+whichever you run first pays the one-time scan cost.
+
 ### ✨ Features
 
 - **Multiple Download Modes**: Sequence number, book range, book ID, and legacy catalog-based approaches
@@ -73,28 +111,8 @@ python pdf_book_download_from_zxxeducn.py --sequence 1981 --format pptx
 - `--list-pdf`: list the books that publish a PDF
 - `--refresh-index`: rebuild the cached format index (~3700 requests, cached for 7 days)
 
-#### Knowing what a book offers before you download
-
-The catalogue part files carry an empty `ti_items`, so nothing about a book's
-available formats is visible until its details JSON is fetched. `textbook_info.py`
-does that for the whole catalogue and writes a CSV inventory:
-
-```bash
-python textbook_info.py                 # full catalogue
-python textbook_info.py --pptx-only     # only books with a deck
-```
-
-Written to `~/Downloads/textbook_info/textbook_info.csv`:
-
-| Number | Book ID | Book Name | Has PDF | Has PPTX | PDF Size (MB) | PPTX Size (MB) | Availability |
-|---|---|---|---|---|---|---|---|
-| 1 | bdc00134-... | 统编版...道德与法治一年级上册 | yes | no | 48.2 | | public |
-| 1981 | 6890be8d-... | 第5课 美化处理图片 | yes | yes | 4.6 | 35.1 | public |
-| 2262 | a826f33f-... | 沪教版...体育与健康 一年级（全一册） | no | no | | | restricted by platform |
-
-`Number` is the value to pass to `--sequence` / `--range`, so the CSV doubles as a
-lookup table. Both scripts share the same cached index, so whichever you run first
-pays the scan cost.
+See [Companion Script: textbook_info.py](#-companion-script-textbook_infopy) for a CSV
+inventory of which books offer which formats.
 
 #### Options
 - `--dry-run`: Resolve and print the download URL without downloading
@@ -171,32 +189,6 @@ Downloaded PDFs are saved to:
 └── ...
 ```
 
-### 📊 Companion Script: textbook_info.py
-
-The `textbook_info.py` script is a companion tool that collects metadata for all available textbooks and exports it to a CSV file. This is useful for:
-
-- **Finding specific textbooks**: Search through the CSV to locate books by title, publisher, or other criteria
-- **Planning downloads**: See the complete catalog before deciding what to download
-- **Resume functionality**: Use the sequence numbers to resume interrupted downloads
-
-#### Usage:
-```bash
-python textbook_info.py
-```
-
-#### Output:
-- Creates a CSV file in your Downloads folder
-- Contains: Book ID, Title, Publisher, Catalog position, and Global sequence number
-- Useful for determining the correct parameters for the main download script
-
-#### Example CSV structure:
-```csv
-sequence_number,catalog_index,catalog_position,book_id,title,publisher
-1,0,0,bdc00134-465d-454b-a541-dcd0cec4d86e,义务教育教科书·道德与法治一年级上册,统编版
-2,0,1,bdc00135-465d-454b-a541-dcd0cec4d86e,义务教育教科书·道德与法治一年级下册,统编版
-...
-```
-
 ### 🐛 Troubleshooting
 
 - **Network Errors**: Check your internet connection and firewall settings
@@ -214,6 +206,42 @@ Open source - feel free to use and modify as needed.
 ### 📚 概述
 
 这是一个增强版的脚本，用于从国家中小学智慧教育平台下载完整的PDF教材，支持多种下载模式、全面的错误处理和灵活的下载控制。
+
+### 📊 配套脚本：textbook_info.py
+
+**请从这里开始。** `textbook_info.py` 会导出整个目录的 CSV 清单（每本书一行），
+下方各下载模式所使用的**序列号**正是由它给出的。
+
+之所以需要这一步，是因为平台发布的目录文件中 `ti_items` 为空：在获取每本书自身的
+详情接口之前，既无法得知其位置，也无法得知其提供哪些格式。`textbook_info.py`
+会对全部 3743 个资源完成这一步，并缓存结果。
+
+```bash
+python textbook_info.py                 # 完整目录
+python textbook_info.py --pptx-only     # 仅含 PowerPoint 课件的资源
+```
+
+保存至 `~/Downloads/textbook_info/textbook_info.csv`：
+
+| Number | Book ID | Book Name | Has PDF | Has PPTX | PDF Size (MB) | PPTX Size (MB) | Availability |
+|---|---|---|---|---|---|---|---|
+| 1 | bdc00134-... | 统编版...道德与法治一年级上册 | yes | no | 48.2 | | public |
+| 1981 | 6890be8d-... | 第5课 美化处理图片 | yes | yes | 4.6 | 35.1 | public |
+| 2262 | a826f33f-... | 沪教版...体育与健康 一年级（全一册） | no | no | | | restricted by platform |
+
+**`Number` 即 `--sequence` 与 `--range` 所用的序列号。** 在 CSV 中找到所需的行，
+然后传入其 Number 即可：
+
+```bash
+python pdf_book_download_from_zxxeducn.py --sequence 1981 --format pptx
+```
+
+其余列可在下载前告知预期内容：`Has PDF` / `Has PPTX` 及其文件大小，以及
+`Availability`——用于区分"该资源本就没有课件"与"平台完全禁止下载"
+（`restricted by platform`）两种情况。
+
+两个脚本共用同一份格式索引缓存（7 天；`--refresh-index` 可重建），
+因此先运行哪个都可以，一次扫描的开销只需付出一次。
 
 ### ✨ 功能特点
 
@@ -278,26 +306,7 @@ python pdf_book_download_from_zxxeducn.py --sequence 1981 --format pptx
 - `--list-pdf`: 列出提供 PDF 的资源
 - `--refresh-index`: 重建格式索引缓存（约 3700 次请求，缓存 7 天）
 
-#### 下载前如何得知资源提供哪些格式
-
-目录文件中的 `ti_items` 为空，因此在获取详情接口之前无法得知某个资源提供哪些格式。
-`textbook_info.py` 会对整个目录完成这一步，并导出 CSV 清单：
-
-```bash
-python textbook_info.py                 # 完整目录
-python textbook_info.py --pptx-only     # 仅含 PowerPoint 课件的资源
-```
-
-保存至 `~/Downloads/textbook_info/textbook_info.csv`：
-
-| Number | Book ID | Book Name | Has PDF | Has PPTX | PDF Size (MB) | PPTX Size (MB) | Availability |
-|---|---|---|---|---|---|---|---|
-| 1 | bdc00134-... | 统编版...道德与法治一年级上册 | yes | no | 48.2 | | public |
-| 1981 | 6890be8d-... | 第5课 美化处理图片 | yes | yes | 4.6 | 35.1 | public |
-| 2262 | a826f33f-... | 沪教版...体育与健康 一年级（全一册） | no | no | | | restricted by platform |
-
-`Number` 即 `--sequence` / `--range` 所用的序号，因此该 CSV 可直接作为查询表使用。
-两个脚本共用同一份索引缓存，先运行哪个都可以。
+各资源提供哪些格式，请参见 [配套脚本：textbook_info.py](#-配套脚本textbook_infopy) 导出的 CSV 清单。
 
 #### 可选参数
 - `--dry-run`: 仅解析并打印下载链接，不实际下载
@@ -373,32 +382,6 @@ python pdf_book_download_from_zxxeducn.py --table 1 --item 5
 └── ...
 ```
 
-### 📊 配套脚本：textbook_info.py
-
-`textbook_info.py` 脚本是一个配套工具，用于收集所有可用教材的元数据并导出到CSV文件。这对于以下情况很有用：
-
-- **查找特定教材**: 通过CSV搜索按标题、出版社或其他条件定位书籍
-- **规划下载**: 在决定下载内容之前查看完整目录
-- **恢复功能**: 使用序列号恢复中断的下载
-
-#### 使用方法：
-```bash
-python textbook_info.py
-```
-
-#### 输出：
-- 在Downloads文件夹中创建CSV文件
-- 包含：书籍ID、标题、出版社、目录位置和全局序列号
-- 有助于确定主下载脚本的正确参数
-
-#### CSV结构示例：
-```csv
-sequence_number,catalog_index,catalog_position,book_id,title,publisher
-1,0,0,bdc00134-465d-454b-a541-dcd0cec4d86e,义务教育教科书·道德与法治一年级上册,统编版
-2,0,1,bdc00135-465d-454b-a541-dcd0cec4d86e,义务教育教科书·道德与法治一年级下册,统编版
-...
-```
-
 ### 🐛 故障排除
 
 - **网络错误**: 检查网络连接和防火墙设置
@@ -413,6 +396,8 @@ sequence_number,catalog_index,catalog_position,book_id,title,publisher
 
 ## 🔄 Version History
 
+- **v3.2.0**: Added the PowerPoint (`.pptx`) download route (`--all-pptx`, `--format`, `--list-pptx`), and rebuilt `textbook_info.py` to record per-book PDF/PPTX availability
+- **v3.1.0**: Fixed PDF resolution against the platform's current metadata (select by `ti_format`, magic-byte validation, cached catalogue, streamed writes)
 - **v3.0.0**: Modified the download path and added more download mods. Enhanced documentation, type hints, and modular architecture
 - **v2.0.0**: Modified the download path and added new download control
 - **v1.0.0**: Original script with basic functionality
