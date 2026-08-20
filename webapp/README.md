@@ -3,9 +3,9 @@
 Local web UI for the textbook downloader.
 
 ```bash
-python webapp/server.py                 # http://127.0.0.1:8000
-python webapp/server.py --port 9000
-python webapp/server.py --refresh-index # rescan formats before starting
+python3 webapp/server.py                 # http://127.0.0.1:8000
+python3 webapp/server.py --port 9000
+python3 webapp/server.py --refresh-index # rescan formats before starting
 ```
 
 | File | Purpose |

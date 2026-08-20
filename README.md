@@ -22,8 +22,8 @@ book's own details JSON is fetched. `textbook_info.py` does that once for all 37
 and caches the result.
 
 ```bash
-python textbook_info.py                 # full catalogue
-python textbook_info.py --pptx-only     # only books with a PowerPoint deck
+python3 textbook_info.py                 # full catalogue
+python3 textbook_info.py --pptx-only     # only books with a PowerPoint deck
 ```
 
 Written to `~/Downloads/textbook_info/textbook_info.csv`:
@@ -38,7 +38,7 @@ Written to `~/Downloads/textbook_info/textbook_info.csv`:
 want, then pass its Number:
 
 ```bash
-python pdf_book_download_from_zxxeducn.py --sequence 1981 --format pptx
+python3 pdf_book_download_from_zxxeducn.py --sequence 1981 --format pptx
 ```
 
 The remaining columns tell you what to expect before committing to a download: `Has PDF` /
@@ -53,10 +53,22 @@ whichever you run first pays the one-time scan cost.
 A local web UI wraps the same downloader with browsing, filtering and bulk downloads:
 
 ```bash
-python webapp/server.py          # then open http://127.0.0.1:8000
+python3 webapp/server.py          # then open http://127.0.0.1:8000
 ```
 
 It needs no extra packages - standard library plus the `requests` the CLI already uses.
+The server runs in the foreground; press `Ctrl-C` to stop it. Nothing is served once it exits,
+so **"127.0.0.1 refused to connect" almost always means the server is not running** - start it
+again with the command above. On macOS use `python3`; there is usually no bare `python`.
+To keep it running after closing the terminal:
+
+```bash
+nohup python3 webapp/server.py > /tmp/textbook-webapp.log 2>&1 &   # start in background
+pkill -f webapp/server.py                                          # stop it
+```
+
+The first launch spends a few minutes building the format index; later starts read the cache
+and are instant. The page shows 正在建立索引 while that runs.
 
 - **Cascading filters** using the platform's own tag dimensions: 学段 → 学科 → 版本 → 年级 → 册次,
   each option showing how many books it would yield, plus format, availability and title search.
@@ -87,22 +99,22 @@ personal use.
 Downloads a specific book by its global sequence number across all catalogs.
 
 ```bash
-python pdf_book_download_from_zxxeducn.py --sequence 2548
+python3 pdf_book_download_from_zxxeducn.py --sequence 2548
 ```
 
 #### 2. **By Book Range** (`--range`)
 Downloads multiple books within a specified range.
 
 ```bash
-python pdf_book_download_from_zxxeducn.py --range "200-250"
-python pdf_book_download_from_zxxeducn.py --range "200"  # Single book
+python3 pdf_book_download_from_zxxeducn.py --range "200-250"
+python3 pdf_book_download_from_zxxeducn.py --range "200"  # Single book
 ```
 
 #### 3. **By Book ID** (`--book-id`)
 Downloads a specific book by its unique identifier (UUID).
 
 ```bash
-python pdf_book_download_from_zxxeducn.py --book-id "bdc00134-465d-454b-a541-dcd0cec4d86e"
+python3 pdf_book_download_from_zxxeducn.py --book-id "bdc00134-465d-454b-a541-dcd0cec4d86e"
 ```
 
 #### 4. **Legacy Modes**
@@ -115,9 +127,9 @@ python pdf_book_download_from_zxxeducn.py --book-id "bdc00134-465d-454b-a541-dcd
 179 of the catalogued titles - the 信息科技 lesson materials - publish a `.pptx` deck under
 flag `source` alongside a PDF under flag `pdf`. They have a dedicated route:
 ```bash
-python pdf_book_download_from_zxxeducn.py --list-pptx          # list all 179 (1.5 GB total)
-python pdf_book_download_from_zxxeducn.py --all-pptx           # download every deck
-python pdf_book_download_from_zxxeducn.py --all-pptx --format all --limit 5
+python3 pdf_book_download_from_zxxeducn.py --list-pptx          # list all 179 (1.5 GB total)
+python3 pdf_book_download_from_zxxeducn.py --all-pptx           # download every deck
+python3 pdf_book_download_from_zxxeducn.py --all-pptx --format all --limit 5
 ```
 
 #### Formats
@@ -127,7 +139,7 @@ python pdf_book_download_from_zxxeducn.py --all-pptx --format all --limit 5
 - `--format all`: every format the book publishes
 
 ```bash
-python pdf_book_download_from_zxxeducn.py --sequence 1981 --format pptx
+python3 pdf_book_download_from_zxxeducn.py --sequence 1981 --format pptx
 ```
 
 #### Listing
@@ -175,22 +187,22 @@ pip install requests
 
 ```bash
 # Download by sequence number
-python pdf_book_download_from_zxxeducn.py --sequence 2548
+python3 pdf_book_download_from_zxxeducn.py --sequence 2548
 
 # Download a range of books
-python pdf_book_download_from_zxxeducn.py --range "1-5"
+python3 pdf_book_download_from_zxxeducn.py --range "1-5"
 
 # Download by book ID
-python pdf_book_download_from_zxxeducn.py --book-id "bdc00134-465d-454b-a541-dcd0cec4d86e"
+python3 pdf_book_download_from_zxxeducn.py --book-id "bdc00134-465d-454b-a541-dcd0cec4d86e"
 
 # Legacy single book download
-python pdf_book_download_from_zxxeducn.py --single 1
+python3 pdf_book_download_from_zxxeducn.py --single 1
 
 # Legacy limited download
-python pdf_book_download_from_zxxeducn.py --limit 10
+python3 pdf_book_download_from_zxxeducn.py --limit 10
 
 # Resume interrupted download
-python pdf_book_download_from_zxxeducn.py --table 1 --item 5
+python3 pdf_book_download_from_zxxeducn.py --table 1 --item 5
 ```
 
 ### 🔧 Technical Details
@@ -241,8 +253,8 @@ Open source - feel free to use and modify as needed.
 会对全部 3743 个资源完成这一步，并缓存结果。
 
 ```bash
-python textbook_info.py                 # 完整目录
-python textbook_info.py --pptx-only     # 仅含 PowerPoint 课件的资源
+python3 textbook_info.py                 # 完整目录
+python3 textbook_info.py --pptx-only     # 仅含 PowerPoint 课件的资源
 ```
 
 保存至 `~/Downloads/textbook_info/textbook_info.csv`：
@@ -257,7 +269,7 @@ python textbook_info.py --pptx-only     # 仅含 PowerPoint 课件的资源
 然后传入其 Number 即可：
 
 ```bash
-python pdf_book_download_from_zxxeducn.py --sequence 1981 --format pptx
+python3 pdf_book_download_from_zxxeducn.py --sequence 1981 --format pptx
 ```
 
 其余列可在下载前告知预期内容：`Has PDF` / `Has PPTX` 及其文件大小，以及
@@ -272,10 +284,22 @@ python pdf_book_download_from_zxxeducn.py --sequence 1981 --format pptx
 配套的本地网页界面在同一套下载逻辑之上提供浏览、筛选与批量下载：
 
 ```bash
-python webapp/server.py          # 然后打开 http://127.0.0.1:8000
+python3 webapp/server.py          # 然后打开 http://127.0.0.1:8000
 ```
 
 无需安装额外依赖——仅使用标准库以及命令行脚本已经依赖的 `requests`。
+服务在前台运行，按 `Ctrl-C` 即可停止。进程退出后不再提供任何服务，
+因此**出现"127.0.0.1 拒绝连接"时，几乎都是因为服务没有在运行**——重新执行上面的命令即可。
+macOS 上请使用 `python3`，系统通常没有单独的 `python` 命令。
+若希望关闭终端后继续运行：
+
+```bash
+nohup python3 webapp/server.py > /tmp/textbook-webapp.log 2>&1 &   # 后台启动
+pkill -f webapp/server.py                                          # 停止
+```
+
+首次启动需要几分钟建立格式索引，之后启动会直接读取缓存、瞬间完成。
+索引建立期间页面会显示"正在建立索引"。
 
 - **级联筛选**，直接采用平台自身的标签维度：学段 → 学科 → 版本 → 年级 → 册次，
   每个选项都会显示对应的资源数量，另有格式、可下载性与书名搜索。
@@ -303,22 +327,22 @@ python webapp/server.py          # 然后打开 http://127.0.0.1:8000
 通过全局序列号下载特定书籍（跨所有目录）。
 
 ```bash
-python pdf_book_download_from_zxxeducn.py --sequence 2548
+python3 pdf_book_download_from_zxxeducn.py --sequence 2548
 ```
 
 #### 2. **按书籍范围下载** (`--range`)
 下载指定范围内的多本书籍。
 
 ```bash
-python pdf_book_download_from_zxxeducn.py --range "200-250"
-python pdf_book_download_from_zxxeducn.py --range "200"  # 单本书
+python3 pdf_book_download_from_zxxeducn.py --range "200-250"
+python3 pdf_book_download_from_zxxeducn.py --range "200"  # 单本书
 ```
 
 #### 3. **按书籍ID下载** (`--book-id`)
 通过唯一标识符（UUID）下载特定书籍。
 
 ```bash
-python pdf_book_download_from_zxxeducn.py --book-id "bdc00134-465d-454b-a541-dcd0cec4d86e"
+python3 pdf_book_download_from_zxxeducn.py --book-id "bdc00134-465d-454b-a541-dcd0cec4d86e"
 ```
 
 #### 4. **传统模式**
@@ -331,9 +355,9 @@ python pdf_book_download_from_zxxeducn.py --book-id "bdc00134-465d-454b-a541-dcd
 目录中有 179 个资源（信息科技课程课件）在 `source` 标记下提供 `.pptx` 课件，
 同时在 `pdf` 标记下提供对应 PDF。这类内容有独立的下载通道：
 ```bash
-python pdf_book_download_from_zxxeducn.py --list-pptx          # 列出全部 179 个（共约 1.5 GB）
-python pdf_book_download_from_zxxeducn.py --all-pptx           # 下载全部课件
-python pdf_book_download_from_zxxeducn.py --all-pptx --format all --limit 5
+python3 pdf_book_download_from_zxxeducn.py --list-pptx          # 列出全部 179 个（共约 1.5 GB）
+python3 pdf_book_download_from_zxxeducn.py --all-pptx           # 下载全部课件
+python3 pdf_book_download_from_zxxeducn.py --all-pptx --format all --limit 5
 ```
 
 #### 文件格式
@@ -343,7 +367,7 @@ python pdf_book_download_from_zxxeducn.py --all-pptx --format all --limit 5
 - `--format all`: 该资源发布的所有格式
 
 ```bash
-python pdf_book_download_from_zxxeducn.py --sequence 1981 --format pptx
+python3 pdf_book_download_from_zxxeducn.py --sequence 1981 --format pptx
 ```
 
 #### 列表查询
@@ -389,22 +413,22 @@ pip install requests
 
 ```bash
 # 按序列号下载
-python pdf_book_download_from_zxxeducn.py --sequence 2548
+python3 pdf_book_download_from_zxxeducn.py --sequence 2548
 
 # 下载书籍范围
-python pdf_book_download_from_zxxeducn.py --range "1-5"
+python3 pdf_book_download_from_zxxeducn.py --range "1-5"
 
 # 按书籍ID下载
-python pdf_book_download_from_zxxeducn.py --book-id "bdc00134-465d-454b-a541-dcd0cec4d86e"
+python3 pdf_book_download_from_zxxeducn.py --book-id "bdc00134-465d-454b-a541-dcd0cec4d86e"
 
 # 传统单本书下载
-python pdf_book_download_from_zxxeducn.py --single 1
+python3 pdf_book_download_from_zxxeducn.py --single 1
 
 # 传统限制下载
-python pdf_book_download_from_zxxeducn.py --limit 10
+python3 pdf_book_download_from_zxxeducn.py --limit 10
 
 # 恢复中断的下载
-python pdf_book_download_from_zxxeducn.py --table 1 --item 5
+python3 pdf_book_download_from_zxxeducn.py --table 1 --item 5
 ```
 
 ### 🔧 技术细节
