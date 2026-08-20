@@ -1,73 +1,132 @@
-import requests
-import json
+#!/usr/bin/env python3
+"""
+Export a CSV inventory of the National Smart Education Platform catalogue.
+
+The catalogue part files list every textbook but carry an EMPTY `ti_items`,
+so they say nothing about which files a book actually publishes. This script
+therefore builds on the asset index from `pdf_book_download_from_zxxeducn`,
+which probes each book's details JSON, and records per book:
+
+  - whether a PDF is downloadable
+  - whether a PowerPoint (.pptx) deck is downloadable
+  - the size of each
+  - whether the platform restricts the title entirely
+
+The `Number` column is the same sequence number the downloader's `--sequence`
+and `--range` options take, so the CSV doubles as a lookup table:
+
+    python textbook_info.py
+    # find a row you want, note its Number, then:
+    python pdf_book_download_from_zxxeducn.py --sequence 1981 --format pptx
+"""
+
+import argparse
 import csv
-from pathlib import Path
 import os
+import sys
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Sequence
 
-def get_parts(return_type='json'):
-    '''get urls return list'''
-    url = 'https://s-file-1.ykt.cbern.com.cn/zxx/ndrs/resources/tch_material/version/data_version.json'
-    headers = {
-        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36",
-        "Referer": "https://basic.smartedu.cn/",
-        "Origin": "https://basic.smartedu.cn"
-    }
-    req = requests.get(url=url, headers=headers)
-    
-    if return_type == 'json':
-        data = json.loads(req.text)
-    else:
-        data = req.text
-    return data['urls'].split(',')
+import pdf_book_download_from_zxxeducn as downloader
 
-def save_textbook_info():
-    """
-    Extract textbook IDs and names and save them to a CSV file
-    """
-    # Get the URLs
-    urls = get_parts()
-    
-    headers = {
-        'Referer': 'https://basic.smartedu.cn/',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36',
-        'Origin': 'https://basic.smartedu.cn',
-        'Accept': 'application/json, text/plain, */*',
-        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-    }
+DEFAULT_CSV = Path.home() / "Downloads" / "textbook_info" / "textbook_info.csv"
 
-    # Prepare CSV file
-    home = str(Path.home())
-    dir_path = os.path.join(home, "Downloads/textbook_info")
-    if not os.path.exists(dir_path):
-        os.makedirs(dir_path)
-    csv_path = os.path.join(dir_path, "textbook_info.csv")
+COLUMNS = [
+    "Number",
+    "Book ID",
+    "Book Name",
+    "Has PDF",
+    "Has PPTX",
+    "PDF Size (MB)",
+    "PPTX Size (MB)",
+    "Availability",
+]
 
-    book_number = 1  # Initialize book counter
+AVAILABILITY = {
+    "ok": "public",
+    "restricted": "restricted by platform",
+    "error": "metadata unavailable",
+}
 
-    # Add UTF-8 BOM to handle Chinese characters
-    with open(csv_path, 'w', newline='', encoding='utf-8-sig') as csvfile:
-        writer = csv.writer(csvfile)
-        writer.writerow(['Number', 'Book ID', 'Book Name'])  # Updated header
 
-        for index, ref in enumerate(urls, 1):
-            print(f"Processing directory {index}/{len(urls)}")
-            response = requests.get(ref, headers=headers)
-            response.encoding = 'utf-8'  # Explicitly set response encoding
-            info = json.loads(response.text)
+def get_parts(return_type: str = "json"):
+    """Return the catalog part URLs (kept for backwards compatibility)."""
+    return downloader.get_parts(return_type)
 
-            for book in info:
-                try:
-                    book_id = book['id']
-                    publisher = next((tag['tag_name'] for tag in book['tag_list'] if '版' in tag['tag_name']), '')
-                    book_name = f"{publisher}{book['title']}"
-                    
-                    writer.writerow([book_number, book_id, book_name])
-                    book_number += 1
-                    
-                except Exception as e:
-                    print(f"Error processing book: {str(e)}")
 
-    print(f"CSV file has been saved to: {csv_path}")
+def _megabytes(num_bytes: int) -> str:
+    return f"{num_bytes / (1024 * 1024):.1f}" if num_bytes else ""
+
+
+def build_rows(entries: Sequence[Dict[str, Any]]) -> List[List[Any]]:
+    rows = []
+    for entry in entries:
+        formats = entry.get("formats") or {}
+        pdf = formats.get("pdf")
+        pptx = formats.get("pptx")
+        rows.append([
+            entry["seq"],
+            entry["id"],
+            entry["title"],
+            "yes" if pdf else "no",
+            "yes" if pptx else "no",
+            _megabytes(pdf["size"]) if pdf else "",
+            _megabytes(pptx["size"]) if pptx else "",
+            AVAILABILITY.get(entry.get("status", "error"), entry.get("status", "")),
+        ])
+    return rows
+
+
+def save_textbook_info(
+    csv_path: Path = DEFAULT_CSV,
+    refresh_index: bool = False,
+    pptx_only: bool = False,
+) -> Path:
+    """Write the catalogue inventory to `csv_path` and return the path."""
+    entries = downloader.build_asset_index(refresh=refresh_index)
+    downloader.index_summary(entries)
+
+    if pptx_only:
+        entries = downloader.books_with_format(entries, "pptx")
+        print(f"\n🔎 Filtered to {len(entries)} books that publish a PowerPoint deck")
+
+    rows = build_rows(entries)
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # utf-8-sig so Excel opens the Chinese titles correctly.
+    with open(csv_path, "w", newline="", encoding="utf-8-sig") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(COLUMNS)
+        writer.writerows(rows)
+
+    with_pdf = sum(1 for r in rows if r[3] == "yes")
+    with_pptx = sum(1 for r in rows if r[4] == "yes")
+    print(f"\n💾 Wrote {len(rows)} rows to {csv_path}")
+    print(f"   • {with_pdf} with a PDF, {with_pptx} with a PowerPoint deck")
+    print("   • 'Number' is the value to pass to --sequence / --range")
+    return csv_path
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Export a CSV inventory of the textbook catalogue, including "
+                    "which books publish a downloadable PDF and/or .pptx deck.",
+    )
+    parser.add_argument("--output", type=Path, default=DEFAULT_CSV,
+                        help=f"CSV destination (default: {DEFAULT_CSV})")
+    parser.add_argument("--refresh-index", action="store_true",
+                        help="Rebuild the cached format index (~3700 requests)")
+    parser.add_argument("--pptx-only", action="store_true",
+                        help="Only include books that publish a PowerPoint deck")
+    args = parser.parse_args(argv)
+
+    try:
+        save_textbook_info(args.output, args.refresh_index, args.pptx_only)
+    except KeyboardInterrupt:
+        print("\n⏹️  Interrupted by user")
+        return 130
+    return 0
+
 
 if __name__ == "__main__":
-    save_textbook_info()
+    sys.exit(main())

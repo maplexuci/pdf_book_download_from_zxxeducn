@@ -73,6 +73,29 @@ python pdf_book_download_from_zxxeducn.py --sequence 1981 --format pptx
 - `--list-pdf`: list the books that publish a PDF
 - `--refresh-index`: rebuild the cached format index (~3700 requests, cached for 7 days)
 
+#### Knowing what a book offers before you download
+
+The catalogue part files carry an empty `ti_items`, so nothing about a book's
+available formats is visible until its details JSON is fetched. `textbook_info.py`
+does that for the whole catalogue and writes a CSV inventory:
+
+```bash
+python textbook_info.py                 # full catalogue
+python textbook_info.py --pptx-only     # only books with a deck
+```
+
+Written to `~/Downloads/textbook_info/textbook_info.csv`:
+
+| Number | Book ID | Book Name | Has PDF | Has PPTX | PDF Size (MB) | PPTX Size (MB) | Availability |
+|---|---|---|---|---|---|---|---|
+| 1 | bdc00134-... | 统编版...道德与法治一年级上册 | yes | no | 48.2 | | public |
+| 1981 | 6890be8d-... | 第5课 美化处理图片 | yes | yes | 4.6 | 35.1 | public |
+| 2262 | a826f33f-... | 沪教版...体育与健康 一年级（全一册） | no | no | | | restricted by platform |
+
+`Number` is the value to pass to `--sequence` / `--range`, so the CSV doubles as a
+lookup table. Both scripts share the same cached index, so whichever you run first
+pays the scan cost.
+
 #### Options
 - `--dry-run`: Resolve and print the download URL without downloading
 - `--overwrite`: Re-download files that already exist locally
@@ -254,6 +277,27 @@ python pdf_book_download_from_zxxeducn.py --sequence 1981 --format pptx
 - `--list-pptx`: 列出提供 PowerPoint 课件的资源
 - `--list-pdf`: 列出提供 PDF 的资源
 - `--refresh-index`: 重建格式索引缓存（约 3700 次请求，缓存 7 天）
+
+#### 下载前如何得知资源提供哪些格式
+
+目录文件中的 `ti_items` 为空，因此在获取详情接口之前无法得知某个资源提供哪些格式。
+`textbook_info.py` 会对整个目录完成这一步，并导出 CSV 清单：
+
+```bash
+python textbook_info.py                 # 完整目录
+python textbook_info.py --pptx-only     # 仅含 PowerPoint 课件的资源
+```
+
+保存至 `~/Downloads/textbook_info/textbook_info.csv`：
+
+| Number | Book ID | Book Name | Has PDF | Has PPTX | PDF Size (MB) | PPTX Size (MB) | Availability |
+|---|---|---|---|---|---|---|---|
+| 1 | bdc00134-... | 统编版...道德与法治一年级上册 | yes | no | 48.2 | | public |
+| 1981 | 6890be8d-... | 第5课 美化处理图片 | yes | yes | 4.6 | 35.1 | public |
+| 2262 | a826f33f-... | 沪教版...体育与健康 一年级（全一册） | no | no | | | restricted by platform |
+
+`Number` 即 `--sequence` / `--range` 所用的序号，因此该 CSV 可直接作为查询表使用。
+两个脚本共用同一份索引缓存，先运行哪个都可以。
 
 #### 可选参数
 - `--dry-run`: 仅解析并打印下载链接，不实际下载

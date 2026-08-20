@@ -848,6 +848,10 @@ LISTING
   --list-pdf       list the books that publish a PDF
   --refresh-index  rebuild the cached format index (~3700 requests)
 
+  For a browsable inventory of the whole catalogue - one row per book with
+  its PDF/PPTX availability and sizes - run `python textbook_info.py`, which
+  writes a CSV keyed by the same sequence numbers used here.
+
 OPTIONS
   --dry-run        resolve and print the download URL without downloading
   --overwrite      re-download files that already exist locally
