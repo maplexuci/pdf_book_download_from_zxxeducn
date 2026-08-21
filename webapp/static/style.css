@@ -100,3 +100,12 @@ table.grid { width: 100%; border-collapse: collapse; font-size: 14px; }
 .st-failed { color: var(--bad); }
 .st-running { color: var(--accent); }
 .st-cancelled, .st-pending { color: var(--muted); }
+
+.badge.course { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
+.badge.missing { color: var(--bad); border-color: var(--bad); background: color-mix(in srgb, var(--bad) 10%, transparent); }
+tr.row-missing { background: color-mix(in srgb, var(--bad) 7%, transparent); }
+tr.row-course td { opacity: .85; }
+.child-links { margin-top: 4px; font-size: 12.5px; }
+.child-links a { color: var(--accent); cursor: pointer; text-decoration: none; margin-right: 8px; }
+.child-links a:hover { text-decoration: underline; }
+.kind-key { display: inline-flex; gap: 12px; flex-wrap: wrap; margin-left: 8px; }

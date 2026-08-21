@@ -31,11 +31,12 @@
         </select>
       </label>
       <label class="field">
-        <span>可下载性</span>
-        <select id="availability">
+        <span>资源状态</span>
+        <select id="kind">
           <option value="">全部</option>
-          <option value="public">有可下载文件</option>
-          <option value="restricted">无可下载文件</option>
+          <option value="downloadable">✅ 有可下载文件</option>
+          <option value="course">📦 课程合集（子书单列）</option>
+          <option value="missing">⚠️ 缺失（无法解析）</option>
         </select>
       </label>
       <label class="field grow">
@@ -50,6 +51,7 @@
     <div class="results-head">
       <div>
         <strong id="count">—</strong> 个资源
+        <span id="kind-summary" class="muted small"></span>
         <span id="selection-info" class="muted"></span>
       </div>
       <div class="bulk">

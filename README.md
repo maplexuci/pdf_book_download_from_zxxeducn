@@ -71,7 +71,10 @@ The first launch spends a few minutes building the format index; later starts re
 and are instant. The page shows 正在建立索引 while that runs.
 
 - **Cascading filters** using the platform's own tag dimensions: 学段 → 学科 → 版本 → 年级 → 册次,
-  each option showing how many books it would yield, plus format, availability and title search.
+  each option showing how many books it would yield, plus format and title search.
+- **Resource status** makes coverage explicit, with a running count of each in the header:
+  ✅ 有可下载文件 (3384), 📦 课程合集 (302 - bundles whose child books are separate, linked rows),
+  ⚠️ 缺失 (57 - genuine gaps, shown tinted with the reason and no download button).
 - **Single downloads** stream through the server so the file keeps its proper 出版社+书名 name.
 - **Bulk downloads** run as background jobs (2 at a time, 1 s apart) writing into the same
   `~/Downloads/textbook_download/` folder, with live progress over SSE and a cancel button.
@@ -317,7 +320,10 @@ pkill -f webapp/server.py                                          # 停止
 索引建立期间页面会显示"正在建立索引"。
 
 - **级联筛选**，直接采用平台自身的标签维度：学段 → 学科 → 版本 → 年级 → 册次，
-  每个选项都会显示对应的资源数量，另有格式、可下载性与书名搜索。
+  每个选项都会显示对应的资源数量，另有格式与书名搜索。
+- **资源状态**一目了然，并在标题栏实时统计：
+  ✅ 有可下载文件（3384）、📦 课程合集（302，其子教材为可点击的独立条目）、
+  ⚠️ 缺失（57，标红并说明原因，且不提供下载按钮）。
 - **单个下载**经由服务器转发，因此文件名会保留完整的"出版社+书名"。
 - **批量下载**以后台任务运行（同时 2 个、间隔 1 秒），保存至相同的
   `~/Downloads/textbook_download/` 目录，并通过 SSE 实时显示进度，可随时取消。
@@ -493,6 +499,7 @@ python3 pdf_book_download_from_zxxeducn.py --table 1 --item 5
 
 ## 🔄 Version History
 
+- **v3.5.0**: Web UI distinguishes ✅ downloadable / 📦 course bundle / ⚠️ missing, with live counts, child-book links on bundles, and a status filter
 - **v3.4.0**: Resolve special-education titles through their parent `thematic_course` listing, recovering 372 previously unreachable books (PDF 3012 → 3384, PowerPoint 179 → 252)
 - **v3.3.0**: Added a local web interface (`webapp/`) with cascading 学段/学科/版本/年级/册次 filters, streamed single downloads and background bulk jobs
 - **v3.2.0**: Added the PowerPoint (`.pptx`) download route (`--all-pptx`, `--format`, `--list-pptx`), and rebuilt `textbook_info.py` to record per-book PDF/PPTX availability

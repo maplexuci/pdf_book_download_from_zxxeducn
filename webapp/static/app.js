@@ -6,7 +6,7 @@ const FMT_LABEL = { pdf: 'PDF', pptx: '课件' };
 const state = {
   dimensions: [],          // [{key,label}] from the server
   filters: {},             // active dimension selections
-  q: '', fmt: '', availability: '',
+  q: '', fmt: '', kind: '',
   page: 1, pageSize: 50, total: 0,
   selected: new Map(),     // id -> {id,title,formats}
   jobs: new Map(),
@@ -22,7 +22,7 @@ function queryString(extra = {}) {
   for (const key of DIM_ORDER) if (state.filters[key]) p.set(key, state.filters[key]);
   if (state.q) p.set('q', state.q);
   if (state.fmt) p.set('fmt', state.fmt);
-  if (state.availability) p.set('availability', state.availability);
+  if (state.kind) p.set('kind', state.kind);
   for (const [k, v] of Object.entries(extra)) p.set(k, v);
   return p.toString();
 }
@@ -85,9 +85,13 @@ function badgesFor(book) {
     bits.push(`<span class="badge ${kind}">${FMT_LABEL[kind] || kind} ${fmtSize(size)}</span>`);
   }
   if (!bits.length) {
-    bits.push(book.status === 'restricted'
-      ? '<span class="badge locked">无可下载文件</span>'
-      : '<span class="badge">无可下载文件</span>');
+    if (book.kind === 'course') {
+      const n = (book.children || []).length;
+      bits.push(`<span class="badge course">📦 课程合集</span>`);
+      bits.push(`<span class="muted small">含 ${n} 本可下载教材</span>`);
+    } else {
+      bits.push('<span class="badge missing">⚠️ 缺失·无法解析</span>');
+    }
   }
   return bits.join('');
 }
@@ -105,6 +109,8 @@ function renderRows(books) {
   tbody.innerHTML = '';
   for (const book of books) {
     const tr = document.createElement('tr');
+    if (book.kind === 'missing') tr.className = 'row-missing';
+    if (book.kind === 'course') tr.className = 'row-course';
 
     const check = document.createElement('td');
     const box = document.createElement('input');
@@ -125,6 +131,29 @@ function renderRows(books) {
     const title = document.createElement('td');
     title.className = 'title-cell';
     title.textContent = book.title;
+    if (book.kind === 'course' && (book.children || []).length) {
+      const links = document.createElement('div');
+      links.className = 'child-links';
+      links.append('内含：');
+      for (const child of book.children) {
+        const a = document.createElement('a');
+        a.textContent = `#${child.seq} ${child.title.slice(0, 24)}`;
+        a.title = '在列表中查看这本教材';
+        a.addEventListener('click', () => {
+          state.q = child.title; state.kind = ''; state.page = 1;
+          $('q').value = child.title; $('kind').value = '';
+          refresh();
+        });
+        links.appendChild(a);
+      }
+      title.appendChild(links);
+    }
+    if (book.kind === 'missing') {
+      const note = document.createElement('div');
+      note.className = 'child-links muted';
+      note.textContent = '平台未提供可解析的文件（其所属课程不在目录中）';
+      title.appendChild(note);
+    }
 
     const tags = document.createElement('td');
     tags.className = 'muted small';
@@ -233,6 +262,13 @@ async function refresh() {
     state.total = bookData.total;
     renderRows(bookData.books);
     $('count').textContent = bookData.total.toLocaleString('zh-CN');
+    const k = facetData.kinds || {};
+    $('kind-summary').innerHTML =
+      `　<span class="kind-key">` +
+      `<span>✅ 可下载 ${(k.downloadable || 0).toLocaleString('zh-CN')}</span>` +
+      `<span>📦 课程合集 ${(k.course || 0).toLocaleString('zh-CN')}</span>` +
+      `<span style="color:var(--bad)">⚠️ 缺失 ${(k.missing || 0).toLocaleString('zh-CN')}</span>` +
+      `</span>`;
     const pages = Math.max(1, Math.ceil(bookData.total / state.pageSize));
     $('page-info').textContent = `第 ${state.page} / ${pages} 页`;
     $('prev').disabled = state.page <= 1;
@@ -264,12 +300,12 @@ function bindControls() {
     typing = setTimeout(() => { state.q = e.target.value.trim(); state.page = 1; refresh(); }, 250);
   });
   $('fmt').addEventListener('change', (e) => { state.fmt = e.target.value; state.page = 1; refresh(); });
-  $('availability').addEventListener('change', (e) => {
-    state.availability = e.target.value; state.page = 1; refresh();
+  $('kind').addEventListener('change', (e) => {
+    state.kind = e.target.value; state.page = 1; refresh();
   });
   $('reset').addEventListener('click', () => {
-    state.filters = {}; state.q = ''; state.fmt = ''; state.availability = ''; state.page = 1;
-    $('q').value = ''; $('fmt').value = ''; $('availability').value = '';
+    state.filters = {}; state.q = ''; state.fmt = ''; state.kind = ''; state.page = 1;
+    $('q').value = ''; $('fmt').value = ''; $('kind').value = '';
     refresh();
   });
   $('prev').addEventListener('click', () => { if (state.page > 1) { state.page--; refresh(); } });

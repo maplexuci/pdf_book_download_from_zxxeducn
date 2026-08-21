@@ -272,9 +272,13 @@ def get_book_by_sequence_number(
 # Asset resolution
 # ---------------------------------------------------------------------------
 
-def build_special_edu_index(refresh: bool = False) -> Dict[str, Dict[str, Any]]:
+def build_special_edu_index(refresh: bool = False) -> Dict[str, Any]:
     """
-    Map every special-education child resource id to its full record.
+    Index the special-education course bundles.
+
+    Returns {"children": {child_id: record}, "courses": {course_id: [child_id]}}
+    - `children` resolves a document that 403s on the per-document endpoint
+    - `courses` lets a UI show what a container node actually holds
 
     Each `thematic_course` entry in the catalogue exposes its children at
     SPECIAL_EDU_PATH, and those children carry the ti_items (including the
@@ -291,8 +295,10 @@ def build_special_edu_index(refresh: bool = False) -> Dict[str, Dict[str, Any]]:
         if not refresh and SPECIAL_EDU_INDEX_PATH.exists():
             try:
                 cached = json.loads(SPECIAL_EDU_INDEX_PATH.read_text(encoding="utf-8"))
-                if time.time() - cached.get("generated", 0) < INDEX_MAX_AGE:
-                    _SPECIAL_EDU = cached.get("children") or {}
+                if (time.time() - cached.get("generated", 0) < INDEX_MAX_AGE
+                        and cached.get("children") and cached.get("courses")):
+                    _SPECIAL_EDU = {"children": cached["children"],
+                                    "courses": cached["courses"]}
                     return _SPECIAL_EDU
             except (json.JSONDecodeError, OSError):
                 pass
@@ -302,6 +308,7 @@ def build_special_edu_index(refresh: bool = False) -> Dict[str, Dict[str, Any]]:
         print(f"🔎 Resolving {len(courses)} special-education course bundles...")
 
         children: Dict[str, Dict[str, Any]] = {}
+        courses_map: Dict[str, List[str]] = {}
         lock = threading.Lock()
 
         def fetch(course_id: str) -> None:
@@ -319,20 +326,23 @@ def build_special_edu_index(refresh: bool = False) -> Dict[str, Dict[str, Any]]:
                 except json.JSONDecodeError:
                     continue
                 with lock:
+                    held = []
                     for item in items or []:
                         if item.get("id"):
                             children[item["id"]] = item
+                            held.append(item["id"])
+                    courses_map[course_id] = held
                 return
 
         with ThreadPoolExecutor(10) as pool:
             list(pool.map(fetch, courses))
 
-        _SPECIAL_EDU = children
+        _SPECIAL_EDU = {"children": children, "courses": courses_map}
         try:
             SPECIAL_EDU_INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
             SPECIAL_EDU_INDEX_PATH.write_text(
-                json.dumps({"generated": time.time(), "children": children},
-                           ensure_ascii=False),
+                json.dumps({"generated": time.time(), "children": children,
+                            "courses": courses_map}, ensure_ascii=False),
                 encoding="utf-8")
         except OSError as exc:
             print(f"⚠️ Could not cache special-education index: {exc}")
@@ -390,7 +400,7 @@ def get_book_details(
     if last_status == "restricted":
         # Not actually restricted - it may be a special-education child
         # resource, whose record lives in its parent course listing.
-        record = build_special_edu_index().get(book_id)
+        record = build_special_edu_index()["children"].get(book_id)
         if record:
             return record, "ok"
 

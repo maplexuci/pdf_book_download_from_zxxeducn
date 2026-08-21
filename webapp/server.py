@@ -125,6 +125,14 @@ def build_web_index(refresh: bool = False) -> List[Dict[str, Any]]:
         assets = {entry["seq"]: entry for entry in dl.build_asset_index(refresh=refresh)}
         books = dl.flat_catalog()
 
+        # Course bundles hold no file themselves; map them to the child books
+        # they contain so the UI can distinguish "is a container" from
+        # "genuinely has nothing".
+        special = dl.build_special_edu_index()
+        course_children = special.get("courses") or {}
+        seq_by_id = {b.get("id"): i for i, b in enumerate(books, 1)}
+        assets_by_id = {a["id"]: a for a in assets.values()}
+
         entries: List[Dict[str, Any]] = []
         for seq, book in enumerate(books, 1):
             asset = assets.get(seq, {})
@@ -136,6 +144,28 @@ def build_web_index(refresh: bool = False) -> List[Dict[str, Any]]:
                 "status": asset.get("status", "error"),
                 "formats": {k: v.get("size", 0) for k, v in formats.items()},
             }
+
+            # kind: what this row IS, which is what the user needs to see
+            #   downloadable - has a file
+            #   course       - a thematic_course bundle; its books are separate rows
+            #   missing      - a real gap: a document with no resolvable file
+            if entry["formats"]:
+                entry["kind"] = "downloadable"
+            elif book.get("resource_type_code") == "thematic_course":
+                entry["kind"] = "course"
+                held = []
+                for child_id in course_children.get(book.get("id", ""), []):
+                    child = assets_by_id.get(child_id)
+                    if child and child.get("formats"):
+                        held.append({
+                            "seq": seq_by_id.get(child_id),
+                            "title": child.get("title", ""),
+                            "formats": sorted(child["formats"]),
+                        })
+                entry["children"] = held
+            else:
+                entry["kind"] = "missing"
+
             entry.update(_tags_for(book))
             entries.append(entry)
 
@@ -165,6 +195,15 @@ def _matches_dimension(entry: Dict[str, Any], key: str, wanted: str) -> bool:
     return wanted in values
 
 
+def kind_counts(params: Dict[str, str]) -> Dict[str, int]:
+    """How many rows of each kind the current filters would yield."""
+    subset = filter_books(params, skip="kind")
+    counts = {"downloadable": 0, "course": 0, "missing": 0}
+    for entry in subset:
+        counts[entry.get("kind", "missing")] = counts.get(entry.get("kind", "missing"), 0) + 1
+    return counts
+
+
 def filter_books(params: Dict[str, str], skip: Optional[str] = None) -> List[Dict[str, Any]]:
     """Apply the active filters, optionally ignoring one dimension (for facet counts)."""
     books = build_web_index()
@@ -185,6 +224,9 @@ def filter_books(params: Dict[str, str], skip: Optional[str] = None) -> List[Dic
         if not ok:
             continue
         if fmt in ("pdf", "pptx") and fmt not in entry["formats"]:
+            continue
+        kind = params.get("kind")
+        if kind and skip != "kind" and entry.get("kind") != kind:
             continue
         if availability == "public" and entry["status"] != "ok":
             continue
@@ -474,6 +516,7 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/facets":
                 params = self._query()
                 self._send_json({"facets": facet_counts(params),
+                                 "kinds": kind_counts(params),
                                  "total": len(filter_books(params))})
             elif path == "/api/books":
                 self._books()
