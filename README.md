@@ -124,10 +124,10 @@ python3 pdf_book_download_from_zxxeducn.py --book-id "bdc00134-465d-454b-a541-dc
 - `--item N`: Start from item N within the catalog (0-based indexing)
 
 #### 5. **PowerPoint Materials** (`--all-pptx`)
-179 of the catalogued titles - the 信息科技 lesson materials - publish a `.pptx` deck under
+252 of the catalogued titles - mostly 信息科技 lesson materials - publish a `.pptx` deck under
 flag `source` alongside a PDF under flag `pdf`. They have a dedicated route:
 ```bash
-python3 pdf_book_download_from_zxxeducn.py --list-pptx          # list all 179 (1.5 GB total)
+python3 pdf_book_download_from_zxxeducn.py --list-pptx          # list all 252 (2.0 GB total)
 python3 pdf_book_download_from_zxxeducn.py --all-pptx           # download every deck
 python3 pdf_book_download_from_zxxeducn.py --all-pptx --format all --limit 5
 ```
@@ -161,17 +161,27 @@ Surveyed across all 3743 catalogued titles:
 
 | | Count |
 |---|---|
-| PDF available | 3012 |
-| PowerPoint available | 179 (all 179 also have a PDF) |
-| Restricted by the platform | 725 |
+| PDF available | 3384 |
+| PowerPoint available | 252 (all 252 also have a PDF) |
+| No file of their own | 359 (302 course containers + 57 unresolved) |
 
-#### Titles With No Downloadable File
-725 titles (e.g. the 体育与健康 series) publish no downloadable file: their details metadata
-returns HTTP 403, so there is no PDF or deck to fetch. This is **not** a sign-in gate - the
-platform's own frontend requests the identical URL and receives the identical 403, and the
-per-page preview images for these titles are publicly fetchable. Only a packaged source file
-is absent. The scripts report these and skip them; they do not reassemble preview images into
-a document.
+#### Special-Education Titles, And What Is Left
+
+Special-education books (the 体育与健康 series and others) are published as **course bundles**,
+not standalone documents. Requesting the child document's own id from the usual details
+endpoint returns HTTP 403 - not because it is restricted, but because that id belongs to a
+`thematic_course`. The real record lives in the parent course listing:
+
+```
+https://s-file-1.ykt.cbern.com.cn/zxx/ndrs/special_edu/thematic_course/{course_id}/resources/list.json
+```
+
+The downloader consults that listing automatically, which makes **372 previously unreachable
+titles** downloadable.
+
+What remains without a file of its own: 302 `thematic_course` container nodes (course bundles
+rather than books - their child books are catalogued separately and download fine) and 57
+special-education entries whose parent course lists no file for them.
 
 ### 📋 Requirements
 
@@ -357,10 +367,10 @@ python3 pdf_book_download_from_zxxeducn.py --book-id "bdc00134-465d-454b-a541-dc
 - `--item N`: 从目录中的项目N开始（基于0的索引）
 
 #### 5. **PowerPoint 课件** (`--all-pptx`)
-目录中有 179 个资源（信息科技课程课件）在 `source` 标记下提供 `.pptx` 课件，
+目录中有 252 个资源（主要为信息科技课程课件）在 `source` 标记下提供 `.pptx` 课件，
 同时在 `pdf` 标记下提供对应 PDF。这类内容有独立的下载通道：
 ```bash
-python3 pdf_book_download_from_zxxeducn.py --list-pptx          # 列出全部 179 个（共约 1.5 GB）
+python3 pdf_book_download_from_zxxeducn.py --list-pptx          # 列出全部 252 个（共约 2.0 GB）
 python3 pdf_book_download_from_zxxeducn.py --all-pptx           # 下载全部课件
 python3 pdf_book_download_from_zxxeducn.py --all-pptx --format all --limit 5
 ```
@@ -393,15 +403,24 @@ python3 pdf_book_download_from_zxxeducn.py --sequence 1981 --format pptx
 
 | | 数量 |
 |---|---|
-| 提供 PDF | 3012 |
-| 提供 PowerPoint | 179（全部同时提供 PDF） |
-| 平台限制下载 | 725 |
+| 提供 PDF | 3384 |
+| 提供 PowerPoint | 252（全部同时提供 PDF） |
+| 自身无可下载文件 | 359（302 个课程合集 + 57 个未解析） |
 
-#### 未发布可下载文件的资源
-725 个资源（如体育与健康系列）没有发布可下载文件：其详情接口返回 HTTP 403，
-因此不存在可获取的 PDF 或课件。这**并非**登录限制——平台自身前端请求的是同一个
-地址、得到同样的 403，而这些资源的逐页预览图是公开可取的，缺少的只是打包好的源文件。
-脚本会报告并跳过这些资源，且不会将预览图重新拼装成文档。
+#### 特殊教育资源，以及仍未解析的部分
+
+特殊教育类教材（体育与健康系列等）以**课程合集**（`thematic_course`）形式发布，
+并非独立文档。用子文档自身的 ID 请求常规详情接口会返回 HTTP 403——这并不是受限，
+而是因为该 ID 属于课程合集。真正的记录位于父课程的资源列表中：
+
+```
+https://s-file-1.ykt.cbern.com.cn/zxx/ndrs/special_edu/thematic_course/{course_id}/resources/list.json
+```
+
+脚本会自动回退到该列表，从而使 **372 个此前无法获取的资源**变为可下载。
+
+仍然自身没有文件的部分：302 个 `thematic_course` 课程合集节点（它们是合集而非书籍，
+其子书籍在目录中单独列出且可正常下载），以及 57 个父课程未列出文件的特殊教育资源。
 
 ### 📋 系统要求
 
@@ -474,6 +493,7 @@ python3 pdf_book_download_from_zxxeducn.py --table 1 --item 5
 
 ## 🔄 Version History
 
+- **v3.4.0**: Resolve special-education titles through their parent `thematic_course` listing, recovering 372 previously unreachable books (PDF 3012 → 3384, PowerPoint 179 → 252)
 - **v3.3.0**: Added a local web interface (`webapp/`) with cascading 学段/学科/版本/年级/册次 filters, streamed single downloads and background bulk jobs
 - **v3.2.0**: Added the PowerPoint (`.pptx`) download route (`--all-pptx`, `--format`, `--list-pptx`), and rebuilt `textbook_info.py` to record per-book PDF/PPTX availability
 - **v3.1.0**: Fixed PDF resolution against the platform's current metadata (select by `ti_format`, magic-byte validation, cached catalogue, streamed writes)

@@ -86,7 +86,7 @@ function badgesFor(book) {
   }
   if (!bits.length) {
     bits.push(book.status === 'restricted'
-      ? '<span class="badge locked">未发布可下载文件</span>'
+      ? '<span class="badge locked">无可下载文件</span>'
       : '<span class="badge">无可下载文件</span>');
   }
   return bits.join('');

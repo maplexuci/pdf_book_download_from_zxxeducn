@@ -44,7 +44,7 @@ COLUMNS = [
 
 AVAILABILITY = {
     "ok": "public",
-    "restricted": "restricted by platform",
+    "restricted": "no downloadable file",
     "error": "metadata unavailable",
 }
 

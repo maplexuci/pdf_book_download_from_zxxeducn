@@ -13,20 +13,23 @@ How it works
    details JSON must be fetched separately.
 3. The details JSON lists `ti_items`. The downloadable file is picked by
    `ti_format`, not by `ti_file_flag`:
-     - 2833 books ship the book as a PDF under flag `source`
-     - 179 books (the 信息科技 lesson materials) ship a .pptx deck under
+     - 3132 books ship the book as a PDF under flag `source`
+     - 252 books (mostly 信息科技 lesson materials) ship a .pptx deck under
        flag `source` and the same lesson as a PDF under flag `pdf`
      - flags `image` / `thumbnail` are folders of page JPEGs, never a file
 4. `ti_storages` point at `*-ndr-private` hosts which return 401; rewriting
    the host to `*-ndr-oversea` makes them publicly fetchable.
 
-725 of the 3743 catalogued titles (e.g. the 体育与健康 series) have no public
-details JSON - the CDN returns 403 for that object, so no `ti_items` and no
-downloadable file can be resolved. This is NOT an authentication gate: the
-platform's own frontend requests the same URL and receives the same 403, and
-the per-page preview images for these titles are publicly fetchable. What is
-missing is a published source file, so there is nothing to download. This
-script does not reassemble the preview images into a document.
+Special-education titles are published as `thematic_course` bundles rather
+than standalone documents. The child document's own id returns 403 on
+DETAILS_PATH; its real record - ti_items and all - lives in the parent
+course listing at SPECIAL_EDU_PATH. The resolver falls back to that listing
+automatically.
+
+That leaves 359 of the 3743 catalogued entries with no file of their own:
+302 `thematic_course` container nodes (course bundles, not documents - their
+children are catalogued separately and are downloadable) and 57
+special-education `sub` entries whose parent course lists no file for them.
 """
 
 import argparse
@@ -55,6 +58,12 @@ DATA_VERSION_URL = (
 # The details JSON is mirrored across these hosts; try each in order.
 DETAILS_HOSTS = ("s-file-1", "s-file-2", "s-file-3")
 DETAILS_PATH = "/zxx/ndrv2/resources/tch_material/details/{book_id}.json"
+
+# Special-education titles are published as `thematic_course` bundles instead
+# of standalone documents: the course id resolves to a list of child
+# resources, and it is the CHILD that carries ti_items / a source PDF. The
+# child's own id 403s on DETAILS_PATH, which is why these looked unavailable.
+SPECIAL_EDU_PATH = "/zxx/ndrs/special_edu/thematic_course/{course_id}/resources/list.json"
 
 HEADERS = {
     "User-Agent": (
@@ -110,6 +119,7 @@ def cache_dir() -> Path:
 
 CACHE_DIR = cache_dir()
 INDEX_PATH = CACHE_DIR / "asset_index.json"
+SPECIAL_EDU_INDEX_PATH = CACHE_DIR / "special_edu_index.json"
 LEGACY_INDEX_PATH = OUTPUT_DIR / ".asset_index.json"
 INDEX_MAX_AGE = 7 * 24 * 3600  # refetch the asset index after a week
 
@@ -121,6 +131,10 @@ _CATALOG_PARTS: Optional[List[List[Dict[str, Any]]]] = None
 
 # One requests.Session per worker thread, for the concurrent index scan.
 _THREAD_LOCAL = threading.local()
+
+# child resource id -> resource record, built from the thematic_course lists
+_SPECIAL_EDU: Optional[Dict[str, Dict[str, Any]]] = None
+_SPECIAL_EDU_LOCK = threading.Lock()
 
 
 # ---------------------------------------------------------------------------
@@ -258,6 +272,86 @@ def get_book_by_sequence_number(
 # Asset resolution
 # ---------------------------------------------------------------------------
 
+def build_special_edu_index(refresh: bool = False) -> Dict[str, Dict[str, Any]]:
+    """
+    Map every special-education child resource id to its full record.
+
+    Each `thematic_course` entry in the catalogue exposes its children at
+    SPECIAL_EDU_PATH, and those children carry the ti_items (including the
+    source PDF) that the per-document details endpoint refuses to serve.
+    """
+    global _SPECIAL_EDU
+    if _SPECIAL_EDU is not None and not refresh:
+        return _SPECIAL_EDU
+
+    with _SPECIAL_EDU_LOCK:
+        if _SPECIAL_EDU is not None and not refresh:
+            return _SPECIAL_EDU
+
+        if not refresh and SPECIAL_EDU_INDEX_PATH.exists():
+            try:
+                cached = json.loads(SPECIAL_EDU_INDEX_PATH.read_text(encoding="utf-8"))
+                if time.time() - cached.get("generated", 0) < INDEX_MAX_AGE:
+                    _SPECIAL_EDU = cached.get("children") or {}
+                    return _SPECIAL_EDU
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        courses = [b["id"] for b in flat_catalog()
+                   if b.get("resource_type_code") == "thematic_course"]
+        print(f"🔎 Resolving {len(courses)} special-education course bundles...")
+
+        children: Dict[str, Dict[str, Any]] = {}
+        lock = threading.Lock()
+
+        def fetch(course_id: str) -> None:
+            for host in DETAILS_HOSTS:
+                url = f"https://{host}.ykt.cbern.com.cn" + SPECIAL_EDU_PATH.format(
+                    course_id=course_id)
+                try:
+                    response = thread_session().get(url, timeout=30)
+                except requests.RequestException:
+                    continue
+                if not response.ok:
+                    continue
+                try:
+                    items = response.json()
+                except json.JSONDecodeError:
+                    continue
+                with lock:
+                    for item in items or []:
+                        if item.get("id"):
+                            children[item["id"]] = item
+                return
+
+        with ThreadPoolExecutor(10) as pool:
+            list(pool.map(fetch, courses))
+
+        _SPECIAL_EDU = children
+        try:
+            SPECIAL_EDU_INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
+            SPECIAL_EDU_INDEX_PATH.write_text(
+                json.dumps({"generated": time.time(), "children": children},
+                           ensure_ascii=False),
+                encoding="utf-8")
+        except OSError as exc:
+            print(f"⚠️ Could not cache special-education index: {exc}")
+        print(f"✅ Special-education index: {len(children)} child resources")
+        return _SPECIAL_EDU
+
+
+def thread_session() -> requests.Session:
+    """A per-thread session, so index scans can run concurrently."""
+    session = getattr(_THREAD_LOCAL, "session", None)
+    if session is None:
+        session = requests.Session()
+        session.headers.update(HEADERS)
+        session.mount("https://", requests.adapters.HTTPAdapter(
+            pool_connections=4, pool_maxsize=4, max_retries=2))
+        _THREAD_LOCAL.session = session
+    return session
+
+
 def get_book_details(
     book_id: str, session: Optional[requests.Session] = None, quiet: bool = False
 ) -> Tuple[Optional[Dict[str, Any]], str]:
@@ -292,6 +386,13 @@ def get_book_details(
             last_status = "restricted"
         elif not quiet:
             print(f"    ❌ {host}: details returned HTTP {response.status_code}")
+
+    if last_status == "restricted":
+        # Not actually restricted - it may be a special-education child
+        # resource, whose record lives in its parent course listing.
+        record = build_special_edu_index().get(book_id)
+        if record:
+            return record, "ok"
 
     return None, last_status
 
@@ -449,7 +550,7 @@ def index_summary(entries: Sequence[Dict[str, Any]]) -> None:
     print(f"\n📊 Catalog: {total} books")
     print(f"   • PDF available        : {with_pdf}")
     print(f"   • PowerPoint available : {with_pptx}  (of which {both} also have a PDF)")
-    print(f"   • restricted by platform: {restricted}")
+    print(f"   • no downloadable file : {restricted}")
     if errored:
         print(f"   • metadata unreachable  : {errored}")
 
@@ -864,7 +965,7 @@ DOWNLOAD MODES
   --sequence N     the Nth book across all catalogs (1-based)
   --range A-B      books A through B (also accepts a single number)
   --book-id UUID   one book by its platform id
-  --all-pptx       every book that publishes a PowerPoint deck (179 of them)
+  --all-pptx       every book that publishes a PowerPoint deck (252 of them)
   --single N       legacy: only the Nth book encountered
   --limit N        legacy: stop after N books (also caps --all-pptx)
   --table N        legacy: start at catalog N (0-based)
@@ -875,9 +976,9 @@ FORMATS
   --format pptx    PowerPoint only
   --format all     every format the book publishes
 
-  Of the 3743 catalogued titles, 3012 publish a PDF and 179 (the 信息科技
-  lesson materials) publish a .pptx deck under flag `source` alongside a PDF
-  under flag `pdf`. `--format` works with every mode above.
+  Of the 3743 catalogued titles, 3384 publish a PDF and 252 publish a .pptx
+  deck under flag `source` alongside a PDF under flag `pdf`. `--format` works
+  with every mode above.
 
 LISTING
   --list-pptx      list the books that publish a PowerPoint deck
@@ -901,10 +1002,11 @@ EXAMPLES
   python pdf_book_download_from_zxxeducn.py --sequence 1981 --format pptx
 
 NOTES
-  725 catalogued titles (e.g. the 体育与健康 series) publish no downloadable
-  file: their details metadata returns HTTP 403, so nothing can be fetched.
-  The platform's own site hits the same endpoint with the same result - it is
-  not a sign-in gate. These are reported and skipped.
+  359 catalogued entries publish no file of their own: 302 are course
+  container nodes (their child books are catalogued separately and download
+  fine) and 57 are special-education entries whose parent course lists no
+  file. Special-education books resolve automatically via their parent
+  course listing.
 """,
     )
     parser.add_argument("--sequence", type=int, help="Download by global sequence number")
