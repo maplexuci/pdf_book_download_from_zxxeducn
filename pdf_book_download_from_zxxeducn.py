@@ -20,11 +20,13 @@ How it works
 4. `ti_storages` point at `*-ndr-private` hosts which return 401; rewriting
    the host to `*-ndr-oversea` makes them publicly fetchable.
 
-725 of the 3743 catalogued titles (`download_policy: 2`, e.g. the 体育与健康
-series) have no public details JSON at all - the platform returns 403. Those
-are reported as restricted rather than silently failing; only page preview
-images are exposed for them and this script does not assemble those into a
-document.
+725 of the 3743 catalogued titles (e.g. the 体育与健康 series) have no public
+details JSON - the CDN returns 403 for that object, so no `ti_items` and no
+downloadable file can be resolved. This is NOT an authentication gate: the
+platform's own frontend requests the same URL and receives the same 403, and
+the per-page preview images for these titles are publicly fetchable. What is
+missing is a published source file, so there is nothing to download. This
+script does not reassemble the preview images into a document.
 """
 
 import argparse
@@ -345,7 +347,7 @@ def get_asset_urls(book_id: str, kind: str = "pdf") -> Optional[List[str]]:
     details, status = get_book_details(book_id)
     if details is None:
         if status == "restricted":
-            print(f"🔒 {book_id}: platform does not allow public download of this title")
+            print(f"🔒 {book_id}: no downloadable file published (online preview only)")
         else:
             print(f"❌ {book_id}: could not fetch details metadata")
         return None
@@ -593,7 +595,7 @@ def download_book(
     details, status = get_book_details(book_id)
     if details is None:
         if status == "restricted":
-            print("    🔒 Not publicly downloadable (platform restricts this title)")
+            print("    🔒 No downloadable file published (online preview only)")
             return [(kind, False, "restricted by platform") for kind in formats]
         print("    ❌ Could not fetch details metadata")
         return [(kind, False, "details unavailable") for kind in formats]
@@ -752,7 +754,7 @@ def _download_by_book_id(book_id: str, work_path: Path, formats: Sequence[str],
     details, status = get_book_details(book_id)
     if details is None:
         if status == "restricted":
-            print("🔒 Not publicly downloadable (platform restricts this title)")
+            print("🔒 No downloadable file published (online preview only)")
         else:
             print("❌ Could not fetch details metadata for this ID")
         return
@@ -899,9 +901,10 @@ EXAMPLES
   python pdf_book_download_from_zxxeducn.py --sequence 1981 --format pptx
 
 NOTES
-  725 catalogued titles (e.g. the 体育与健康 series) are marked
-  download-restricted by the platform: their details metadata returns HTTP 403
-  and no file is published. Those are reported as restricted and skipped.
+  725 catalogued titles (e.g. the 体育与健康 series) publish no downloadable
+  file: their details metadata returns HTTP 403, so nothing can be fetched.
+  The platform's own site hits the same endpoint with the same result - it is
+  not a sign-in gate. These are reported and skipped.
 """,
     )
     parser.add_argument("--sequence", type=int, help="Download by global sequence number")

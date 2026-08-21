@@ -346,7 +346,7 @@ class JobManager:
         details, status = dl.get_book_details(item["id"], quiet=True)
         if details is None:
             self._finish(job_id, position, "failed",
-                         "平台限制下载" if status == "restricted" else "无法获取资源信息")
+                         "未发布可下载文件" if status == "restricted" else "无法获取资源信息")
             return
 
         asset = dl.pick_asset(details, item["fmt"])
@@ -573,7 +573,7 @@ class Handler(BaseHTTPRequestHandler):
 
         details, status = dl.get_book_details(book_id, quiet=True)
         if details is None:
-            message = "平台限制下载该资源" if status == "restricted" else "无法获取资源信息"
+            message = "该资源未发布可下载文件（仅提供在线预览）" if status == "restricted" else "无法获取资源信息"
             self._send_json({"error": message}, 403 if status == "restricted" else 502)
             return
 

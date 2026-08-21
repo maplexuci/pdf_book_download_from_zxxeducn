@@ -165,10 +165,13 @@ Surveyed across all 3743 catalogued titles:
 | PowerPoint available | 179 (all 179 also have a PDF) |
 | Restricted by the platform | 725 |
 
-#### Restricted Titles
-725 titles (e.g. the 体育与健康 series) are marked download-restricted by the platform: their
-details metadata returns HTTP 403 and no file is published. The script reports these as
-restricted and skips them.
+#### Titles With No Downloadable File
+725 titles (e.g. the 体育与健康 series) publish no downloadable file: their details metadata
+returns HTTP 403, so there is no PDF or deck to fetch. This is **not** a sign-in gate - the
+platform's own frontend requests the identical URL and receives the identical 403, and the
+per-page preview images for these titles are publicly fetchable. Only a packaged source file
+is absent. The scripts report these and skip them; they do not reassemble preview images into
+a document.
 
 ### 📋 Requirements
 
@@ -394,9 +397,11 @@ python3 pdf_book_download_from_zxxeducn.py --sequence 1981 --format pptx
 | 提供 PowerPoint | 179（全部同时提供 PDF） |
 | 平台限制下载 | 725 |
 
-#### 受限资源
-725 个资源（如体育与健康系列）被平台标记为不可下载：其详情接口返回 HTTP 403，
-且未发布文件。脚本会将其标记为受限并跳过。
+#### 未发布可下载文件的资源
+725 个资源（如体育与健康系列）没有发布可下载文件：其详情接口返回 HTTP 403，
+因此不存在可获取的 PDF 或课件。这**并非**登录限制——平台自身前端请求的是同一个
+地址、得到同样的 403，而这些资源的逐页预览图是公开可取的，缺少的只是打包好的源文件。
+脚本会报告并跳过这些资源，且不会将预览图重新拼装成文档。
 
 ### 📋 系统要求
 
