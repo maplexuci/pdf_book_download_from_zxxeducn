@@ -120,6 +120,8 @@ def cache_dir() -> Path:
 CACHE_DIR = cache_dir()
 INDEX_PATH = CACHE_DIR / "asset_index.json"
 SPECIAL_EDU_INDEX_PATH = CACHE_DIR / "special_edu_index.json"
+# Bumped when the bundle index gains a field or widens the ids it resolves.
+SPECIAL_EDU_SCHEMA = 2
 LEGACY_INDEX_PATH = OUTPUT_DIR / ".asset_index.json"
 INDEX_MAX_AGE = 7 * 24 * 3600  # refetch the asset index after a week
 
@@ -272,17 +274,41 @@ def get_book_by_sequence_number(
 # Asset resolution
 # ---------------------------------------------------------------------------
 
+def bundle_course_ids(books: Sequence[Dict[str, Any]]) -> List[str]:
+    """
+    Every id worth asking SPECIAL_EDU_PATH about.
+
+    Two sources, because the catalogue lists only some parents:
+      - `thematic_course` entries, which are parents in their own right
+      - the `teachmeterial_ids` a compound child names, which is the only route
+        to a parent the catalogue never lists. Those children 403 on the
+        per-document endpoint, so without this they are unreachable.
+    """
+    ids = [b["id"] for b in books
+           if b.get("resource_type_code") == "thematic_course" and b.get("id")]
+    for book in books:
+        props = book.get("resource_custom_properties") or {}
+        if props.get("compound_node") != "sub":
+            continue
+        ids.extend(t for t in (book.get("teachmeterial_ids") or []) if t)
+    return list(dict.fromkeys(ids))          # de-duplicated, order preserved
+
+
 def build_special_edu_index(refresh: bool = False) -> Dict[str, Any]:
     """
-    Index the special-education course bundles.
+    Index the course bundles that hold their children's files.
 
-    Returns {"children": {child_id: record}, "courses": {course_id: [child_id]}}
+    Returns {"children": {child_id: record},
+             "courses":  {course_id: [child_id]},
+             "course_tags": {course_id: tag_list}}
     - `children` resolves a document that 403s on the per-document endpoint
     - `courses` lets a UI show what a container node actually holds
+    - `course_tags` carries the taxonomy of a parent the catalogue omits, the
+      only place its children's 学段/学科/版本 are stated
 
-    Each `thematic_course` entry in the catalogue exposes its children at
-    SPECIAL_EDU_PATH, and those children carry the ti_items (including the
-    source PDF) that the per-document details endpoint refuses to serve.
+    Each bundle exposes its children at SPECIAL_EDU_PATH, and those children
+    carry the ti_items (including the source PDF) that the per-document details
+    endpoint refuses to serve.
     """
     global _SPECIAL_EDU
     if _SPECIAL_EDU is not None and not refresh:
@@ -296,19 +322,23 @@ def build_special_edu_index(refresh: bool = False) -> Dict[str, Any]:
             try:
                 cached = json.loads(SPECIAL_EDU_INDEX_PATH.read_text(encoding="utf-8"))
                 if (time.time() - cached.get("generated", 0) < INDEX_MAX_AGE
+                        and cached.get("schema") == SPECIAL_EDU_SCHEMA
                         and cached.get("children") and cached.get("courses")):
                     _SPECIAL_EDU = {"children": cached["children"],
-                                    "courses": cached["courses"]}
+                                    "courses": cached["courses"],
+                                    "course_tags": cached.get("course_tags") or {}}
                     return _SPECIAL_EDU
             except (json.JSONDecodeError, OSError):
                 pass
 
-        courses = [b["id"] for b in flat_catalog()
-                   if b.get("resource_type_code") == "thematic_course"]
-        print(f"🔎 Resolving {len(courses)} special-education course bundles...")
+        books = flat_catalog()
+        catalogued = {b.get("id") for b in books}
+        courses = bundle_course_ids(books)
+        print(f"🔎 Resolving {len(courses)} course bundles...")
 
         children: Dict[str, Dict[str, Any]] = {}
         courses_map: Dict[str, List[str]] = {}
+        course_tags: Dict[str, List[Dict[str, Any]]] = {}
         lock = threading.Lock()
 
         def fetch(course_id: str) -> None:
@@ -337,12 +367,45 @@ def build_special_edu_index(refresh: bool = False) -> Dict[str, Any]:
         with ThreadPoolExecutor(10) as pool:
             list(pool.map(fetch, courses))
 
-        _SPECIAL_EDU = {"children": children, "courses": courses_map}
+        # A parent the catalogue lists carries its own tags already; one it
+        # omits does not, so its children have nothing to inherit. Fetch those.
+        absent = [cid for cid in courses_map if cid not in catalogued]
+
+        def fetch_tags(course_id: str) -> None:
+            # Deliberately not get_book_details(): its 403 fallback re-enters
+            # this function, and _SPECIAL_EDU_LOCK is held right now. A parent
+            # that 403s has no tags to give anyway.
+            for host in DETAILS_HOSTS:
+                url = f"https://{host}.ykt.cbern.com.cn" + DETAILS_PATH.format(
+                    book_id=course_id)
+                try:
+                    response = thread_session().get(url, timeout=30)
+                except requests.RequestException:
+                    continue
+                if not response.ok:
+                    continue
+                try:
+                    tags = (response.json() or {}).get("tag_list") or []
+                except json.JSONDecodeError:
+                    return
+                if tags:
+                    with lock:
+                        course_tags[course_id] = tags
+                return
+
+        if absent:
+            print(f"🏷️  Fetching tags for {len(absent)} uncatalogued parents...")
+            with ThreadPoolExecutor(10) as pool:
+                list(pool.map(fetch_tags, absent))
+
+        _SPECIAL_EDU = {"children": children, "courses": courses_map,
+                        "course_tags": course_tags}
         try:
             SPECIAL_EDU_INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
             SPECIAL_EDU_INDEX_PATH.write_text(
-                json.dumps({"generated": time.time(), "children": children,
-                            "courses": courses_map}, ensure_ascii=False),
+                json.dumps({"generated": time.time(), "schema": SPECIAL_EDU_SCHEMA,
+                            "children": children, "courses": courses_map,
+                            "course_tags": course_tags}, ensure_ascii=False),
                 encoding="utf-8")
         except OSError as exc:
             print(f"⚠️ Could not cache special-education index: {exc}")
@@ -483,60 +546,49 @@ def get_pdf_url(book_id: str) -> Optional[List[str]]:
 # Asset index (which books publish which formats)
 # ---------------------------------------------------------------------------
 
-def build_asset_index(workers: int = 12, refresh: bool = False) -> List[Dict[str, Any]]:
-    """
-    Probe every catalogued book's details JSON and record which formats it
-    publishes. Cached on disk because it costs ~3700 requests.
-    """
-    source = INDEX_PATH if INDEX_PATH.exists() else LEGACY_INDEX_PATH
-    if not refresh and source.exists():
-        try:
-            cached = json.loads(source.read_text(encoding="utf-8"))
-            age = time.time() - cached.get("generated", 0)
-            if age < INDEX_MAX_AGE and cached.get("books"):
-                print(f"🗂️  Using cached asset index ({len(cached['books'])} books, "
-                      f"{age / 3600:.0f}h old; --refresh-index to rebuild)")
-                return cached["books"]
-        except (json.JSONDecodeError, OSError):
-            pass
+def probe_book_formats(seq: int, book: Dict[str, Any]) -> Dict[str, Any]:
+    """Resolve one catalogue book into an asset-index entry."""
+    book_id = book.get("id", "")
+    details, status = get_book_details(book_id, session=thread_session(), quiet=True)
+    entry: Dict[str, Any] = {
+        "seq": seq,
+        "id": book_id,
+        "title": book_display_name(book),
+        "status": status,
+        "formats": {},
+    }
+    if details is not None:
+        for kind in ASSET_KINDS:
+            item = pick_asset(details, kind)
+            if item:
+                entry["formats"][kind] = {
+                    "flag": item.get("ti_file_flag"),
+                    "size": item.get("ti_size") or 0,
+                }
+    return entry
 
-    books = flat_catalog()
-    print(f"🔎 Scanning {len(books)} books for available formats "
-          f"({workers} workers, this takes a few minutes)...")
 
+def _probe_books(pairs: Sequence[Tuple[int, Dict[str, Any]]], workers: int,
+                 report_every: int = 500) -> List[Dict[str, Any]]:
+    """Probe (seq, book) pairs concurrently, printing progress as they land."""
     entries: List[Dict[str, Any]] = []
     lock = threading.Lock()
     counter = {"n": 0}
 
-    def probe(indexed: Tuple[int, Dict[str, Any]]) -> None:
-        seq, book = indexed
-        book_id = book.get("id", "")
-        details, status = get_book_details(book_id, session=thread_session(), quiet=True)
-        entry = {
-            "seq": seq,
-            "id": book_id,
-            "title": book_display_name(book),
-            "status": status,
-            "formats": {},
-        }
-        if details is not None:
-            for kind in ASSET_KINDS:
-                item = pick_asset(details, kind)
-                if item:
-                    entry["formats"][kind] = {
-                        "flag": item.get("ti_file_flag"),
-                        "size": item.get("ti_size") or 0,
-                    }
+    def work(pair: Tuple[int, Dict[str, Any]]) -> None:
+        entry = probe_book_formats(*pair)
         with lock:
             entries.append(entry)
             counter["n"] += 1
-            if counter["n"] % 500 == 0:
-                print(f"   • scanned {counter['n']}/{len(books)}")
+            if report_every and counter["n"] % report_every == 0:
+                print(f"   • scanned {counter['n']}/{len(pairs)}")
 
     with ThreadPoolExecutor(workers) as pool:
-        list(pool.map(probe, enumerate(books, 1)))
+        list(pool.map(work, pairs))
+    return entries
 
-    entries.sort(key=lambda e: e["seq"])
+
+def _save_asset_index(entries: List[Dict[str, Any]]) -> None:
     try:
         INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
         INDEX_PATH.write_text(
@@ -547,6 +599,84 @@ def build_asset_index(workers: int = 12, refresh: bool = False) -> List[Dict[str
     except OSError as exc:
         print(f"⚠️ Could not cache asset index: {exc}")
 
+
+def _reconcile_asset_index(entries: List[Dict[str, Any]],
+                           workers: int) -> Optional[List[Dict[str, Any]]]:
+    """
+    Re-align a cached index with the catalogue as it stands now.
+
+    An entry's `seq` is only its position at scan time, and the platform adds
+    and withdraws books between scans. Callers join catalogue book -> entry, so
+    a stale `seq` does not merely mislabel a row: it pairs a book with another
+    book's files. Re-derive every `seq` from the live catalogue by id, forget
+    entries the catalogue no longer lists, and probe the ones it has gained.
+
+    Returns None when the drift is large enough that a full rescan is cheaper.
+    """
+    books = flat_catalog()
+    seq_by_id: Dict[str, int] = {}
+    for seq, book in enumerate(books, 1):
+        seq_by_id.setdefault(book.get("id", ""), seq)
+
+    indexed = {entry.get("id") for entry in entries}
+    added = [(seq, book) for seq, book in enumerate(books, 1)
+             if book.get("id") not in indexed]
+    if len(added) > max(200, len(books) // 4):
+        print(f"🔄 Catalogue has {len(added)} books the index never saw; rescanning")
+        return None
+
+    kept: List[Dict[str, Any]] = []
+    moved = 0
+    for entry in entries:
+        seq = seq_by_id.get(entry.get("id", ""))
+        if seq is None:
+            continue                       # withdrawn from the catalogue
+        if seq != entry.get("seq"):
+            moved += 1
+        entry["seq"] = seq
+        kept.append(entry)
+
+    dropped = len(entries) - len(kept)
+    if not (added or dropped or moved):
+        return kept
+
+    if added:
+        print(f"➕ Probing {len(added)} newly catalogued books...")
+        kept.extend(_probe_books(added, workers, report_every=50))
+    if dropped or moved:
+        print(f"🔧 Catalogue drift: {moved} books moved, {dropped} withdrawn")
+
+    kept.sort(key=lambda e: e["seq"])
+    _save_asset_index(kept)
+    return kept
+
+
+def build_asset_index(workers: int = 12, refresh: bool = False) -> List[Dict[str, Any]]:
+    """
+    Probe every catalogued book's details JSON and record which formats it
+    publishes. Cached on disk because it costs ~3700 requests; a warm cache is
+    reconciled against the live catalogue so its sequence numbers stay true.
+    """
+    source = INDEX_PATH if INDEX_PATH.exists() else LEGACY_INDEX_PATH
+    if not refresh and source.exists():
+        try:
+            cached = json.loads(source.read_text(encoding="utf-8"))
+            age = time.time() - cached.get("generated", 0)
+            if age < INDEX_MAX_AGE and cached.get("books"):
+                print(f"🗂️  Using cached asset index ({len(cached['books'])} books, "
+                      f"{age / 3600:.0f}h old; --refresh-index to rebuild)")
+                reconciled = _reconcile_asset_index(cached["books"], workers)
+                if reconciled is not None:
+                    return reconciled
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    books = flat_catalog()
+    print(f"🔎 Scanning {len(books)} books for available formats "
+          f"({workers} workers, this takes a few minutes)...")
+    entries = _probe_books(list(enumerate(books, 1)), workers)
+    entries.sort(key=lambda e: e["seq"])
+    _save_asset_index(entries)
     return entries
 
 
