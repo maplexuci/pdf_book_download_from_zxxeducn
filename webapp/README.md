@@ -45,14 +45,16 @@ validation and CDN fallback behave exactly as on the CLI.
   parent course - marked `↑` in the 分类 column, because the row does not declare it itself.
   A parent the catalogue omits states its taxonomy as one flat tag list, which is sorted into
   dimensions by matching names against the vocabularies the properly tagged rows establish.
-- 63 rows whose parent is itself uncatalogued get, as a last resort, only the 分类 that
-  every identically-titled row agrees on - marked `≈`, because agreement among namesakes
-  is weaker evidence than a parent's statement. Copying one twin wholesale would invent a
-  publisher: 体育与健康教师用书 体能（全一册） exists under 14 different 版本/学段 pairs, so
-  the ambiguous dimensions are left blank rather than guessed.
-- 4 rows still read 未标注 in every dimension. Nothing states their taxonomy: their own
-  record and their parent's are both empty or 403, no bundle-listing record anywhere
-  carries a tag_list, and no namesake exists to agree with.
+- Rows whose parent is itself uncatalogued fall back, in order, to their own title
+  (`✎`), to 学段 derived from 年级 plus the school system the title names (`⊢`), to the
+  publisher some PDFs are stored under, and finally to `catalogue_overrides.json` (`✓`)
+  for facts no request reaches. Each rule was validated against the rows the platform
+  tagged itself - 版本 and 学段 at 100%, the 学段 derivation at 99.5% - and a row is
+  labelled by the WEAKEST source it relies on, so a verified 版本 never makes a parsed
+  年级 look authoritative.
+- What is still blank is written nowhere: 58 rows lack 学段 (体育与健康 教师用书 and
+  学生用书, which have no numeric grade and whose PDF filenames are a single field), and
+  301 of the rows lacking 版本 are 特殊教育, which the platform gives no publisher.
 - ♻️ 本条无文件 is a row the platform published twice while wiring the files to only one
   copy (3 rows). It is not a gap: the row states that IT has nothing and names the
   sequence number that does, with that file's size. ⚠️ 缺失 therefore means only

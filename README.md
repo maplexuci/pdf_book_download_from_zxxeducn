@@ -50,10 +50,10 @@ titles appear more than once, and many children of a compound resource are title
 
 - **Stage / Subject / Version / Grade / Volume** are the same 分类 the web UI filters on,
   and they tell same-named rows apart - 233 of those 270 groups become distinguishable.
-  **Tags From** records where they came from: `declared` by the row itself (3142 rows),
-  `course` inherited from its parent bundle (582 rows that carry none of their own), or
-  `namesakes` - the weakest, kept only where every identically-titled row agrees (63 rows
-  whose parent is uncatalogued and unreachable). 4 rows have no 分类 from any source.
+  **Tags From** records where each value came from, weakest source first, so nothing
+  derived is read as something the platform stated: `declared` by the row itself,
+  `course` inherited from its parent bundle, `read from title`, `derived from 年级+学制`,
+  or `CONFIRMED by hand` from `catalogue_overrides.json`. No row is left without a 分类.
 - **Belongs To** names the book or course a row sits under, so a bare lesson deck says where
   it came from; **Contains** lists a bundle's child Numbers.
 - **Row Type** and **Availability** distinguish the reasons a row can have no file of its
