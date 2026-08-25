@@ -1,7 +1,16 @@
 'use strict';
 
 const DIM_ORDER = ['stage', 'subject', 'version', 'grade', 'volume'];
-const FMT_LABEL = { pdf: 'PDF', pptx: '课件' };
+const FMT_LABEL = { pdf: 'PDF', pptx: '课件', mp3: '音频', ogg: '音频 OGG' };
+const AUDIO_KINDS = ['mp3', 'ogg'];
+
+// Audio is not in `formats` - a book's audio is dozens of files, so it is its
+// own field - but it is downloadable all the same, and every place that asks
+// "does this row have X" has to know that.
+const hasKind = (book, kind) =>
+  AUDIO_KINDS.includes(kind) ? !!book.audio : !!(book.formats || {})[kind];
+const kindsOf = (book) =>
+  [...Object.keys(book.formats || {}), ...(book.audio ? ['mp3'] : [])];
 
 // weakest first: a row is labelled by the least reliable source it relies on
 const SOURCE_MARKS = [
@@ -129,6 +138,10 @@ function badgesFor(book) {
   for (const [kind, size] of Object.entries(book.formats || {})) {
     bits.push(`<span class="badge ${kind}">${FMT_LABEL[kind] || kind} ${fmtSize(size)}</span>`);
   }
+  if (book.audio) {
+    bits.push(`<span class="badge audio">🎧 ${book.audio.count} 条 `
+            + `${fmtSize(book.audio.size)}</span>`);
+  }
   if ((book.alternates || []).length) {
     const identical = book.alternates.every((a) => a.same_file);
     bits.push(`<span class="badge alternate">♊ ${identical ? '同一文件重复' : '同名多版本'}</span>`);
@@ -166,7 +179,7 @@ function checkboxCell(book) {
   const box = document.createElement('input');
   box.type = 'checkbox';
   box.checked = state.selected.has(book.id);
-  box.disabled = !Object.keys(book.formats || {}).length;
+  box.disabled = !kindsOf(book).length;
   box.addEventListener('change', () => {
     if (box.checked) state.selected.set(book.id, book);
     else state.selected.delete(book.id);
@@ -174,6 +187,17 @@ function checkboxCell(book) {
   });
   cell.appendChild(box);
   return cell;
+}
+
+async function queue(items) {
+  const res = await fetch('/api/jobs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ items }),
+  });
+  const data = await res.json();
+  if (data.error) { alert(data.error); return false; }
+  return true;
 }
 
 function downloadCell(book) {
@@ -185,6 +209,21 @@ function downloadCell(book) {
               + `&title=${encodeURIComponent(book.title)}`;
     link.innerHTML = `<button class="mini">${FMT_LABEL[kind] || kind}</button>`;
     cell.appendChild(link);
+  }
+  if (book.audio) {
+    // Not a link: a single response cannot carry a folder of tracks, so this
+    // goes through the download queue and lands on disk beside the PDFs.
+    const button = document.createElement('button');
+    button.className = 'mini';
+    button.textContent = `🎧 ${book.audio.count} 条`;
+    button.title = `下载全部音轨到 ${book.title}/ 文件夹`;
+    button.addEventListener('click', async () => {
+      button.disabled = true;
+      const ok = await queue([{ id: book.id, title: book.title, fmt: 'mp3' }]);
+      button.disabled = false;
+      if (ok) refresh();
+    });
+    cell.appendChild(button);
   }
   return cell;
 }
@@ -473,19 +512,13 @@ function bindControls() {
     const choice = $('bulk-format').value;
     const items = [];
     for (const book of state.selected.values()) {
-      const kinds = choice === 'all' ? Object.keys(book.formats || {}) : [choice];
+      const kinds = choice === 'all' ? kindsOf(book) : [choice];
       for (const kind of kinds) {
-        if (book.formats && book.formats[kind]) items.push({ id: book.id, title: book.title, fmt: kind });
+        if (hasKind(book, kind)) items.push({ id: book.id, title: book.title, fmt: kind });
       }
     }
     if (!items.length) { alert('所选资源没有对应格式的文件'); return; }
-    const res = await fetch('/api/jobs', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items }),
-    });
-    const data = await res.json();
-    if (data.error) { alert(data.error); return; }
+    if (!await queue(items)) return;
     state.selected.clear();
     renderSelection();
     refresh();

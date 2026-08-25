@@ -87,6 +87,7 @@ table.grid { width: 100%; border-collapse: collapse; font-size: 14px; }
 }
 .badge.pdf { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, var(--line)); }
 .badge.pptx { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, var(--line)); }
+.badge.audio { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
 .badge.locked { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 40%, var(--line)); }
 
 .pager { display: flex; justify-content: center; align-items: center; gap: 14px; margin-top: 14px; }

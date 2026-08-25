@@ -104,6 +104,8 @@ def filter_books(params: Dict[str, str], skip: Optional[str] = None) -> List[Dic
                 break
         if not ok:
             continue
+        if fmt in dl.AUDIO_KINDS and not entry.get("audio"):
+            continue
         if fmt in ("pdf", "pptx") and fmt not in entry["formats"]:
             continue
         kind = params.get("kind")
@@ -273,8 +275,7 @@ class JobManager:
         self.publish(job_id)
 
         if item["fmt"] in dl.AUDIO_KINDS:
-            self._finish(job_id, position, "failed",
-                         "音频为整册多个文件，请用命令行 --format audio 下载")
+            self._run_audio_item(job_id, position, item)
             return
 
         details, status = dl.get_book_details(item["id"], quiet=True)
@@ -320,6 +321,75 @@ class JobManager:
             self._finish(job_id, position, "done" if ok else "failed",
                          "" if ok else "下载失败")
         time.sleep(0.5)  # stay polite to the CDN between items
+
+    def _run_audio_item(self, job_id: str, position: int,
+                        item: Dict[str, Any]) -> None:
+        """
+        Download one book's audio as a single queue item.
+
+        A book is dozens of tracks, but it stays one row in the queue: the
+        progress bar spans the whole book the way it does for a PDF, and the
+        files land in a folder of their own, named exactly as the CLI leaves
+        them - so a book fetched here and a book fetched with `--format audio`
+        are the same files in the same place.
+        """
+        tracks, status = dl.audio_tracks(item["id"], item["fmt"], quiet=True)
+        if not tracks:
+            self._finish(job_id, position, "failed",
+                         "该资源未发布音频" if status == "ok" else
+                         "平台不提供该资源的音频" if status == "restricted" else
+                         "无法获取音频列表")
+            return
+
+        with self.lock:
+            item["total"] = sum(track["size"] for track in tracks)
+        self.publish(job_id)
+
+        folder = dl.OUTPUT_DIR / dl.sanitize_filename(item["title"])
+        last_push = [0.0]
+        finished_bytes = [0]
+
+        def on_progress(written: int, _expected: int) -> None:
+            # Deliberately ignores the per-file expectation: `total` is the
+            # whole book's, set once above, and must not be rewritten to the
+            # size of whichever track is in flight.
+            with self.lock:
+                item["written"] = finished_bytes[0] + written
+            now = time.time()
+            if now - last_push[0] > 0.4:   # throttle SSE traffic
+                last_push[0] = now
+                self.publish(job_id)
+
+        def is_cancelled() -> bool:
+            with self.lock:
+                return bool(self.jobs.get(job_id, {}).get("cancel"))
+
+        width = max(2, len(str(tracks[-1]["position"])))
+        saved = 0
+        for track in tracks:
+            if is_cancelled():
+                break
+            title = dl.AUDIO_TITLE_SUFFIX.sub("", track["title"]).strip()
+            stem = f"{track['position']:0{width}d} {title or track['id']}"
+            if dl.download_asset(track["urls"], stem, item["fmt"], str(folder),
+                                 overwrite=False, extension=item["fmt"],
+                                 progress=on_progress, cancelled=is_cancelled,
+                                 quiet=True):
+                saved += 1
+            # Credit the track's declared size either way, so the bar follows
+            # the book rather than stalling on a track that was already on
+            # disk and never reported a byte.
+            finished_bytes[0] += track["size"]
+            with self.lock:
+                item["written"] = finished_bytes[0]
+
+        if is_cancelled():
+            self._finish(job_id, position, "cancelled", "已取消")
+        elif saved == len(tracks):
+            self._finish(job_id, position, "done", "")
+        else:
+            self._finish(job_id, position, "failed",
+                         f"仅下载 {saved}/{len(tracks)} 条音轨")
 
     def _finish(self, job_id: str, position: int, status: str, error: str) -> None:
         with self.lock:
@@ -506,9 +576,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"error": "未知格式"}, 400)
             return
         if kind in dl.AUDIO_KINDS:
-            # One book's audio is dozens of files; this endpoint streams one.
-            self._send_json({"error": "音频为整册多个文件，请用命令行 "
-                                      "--format audio 下载"}, 400)
+            # One book's audio is dozens of files and this endpoint streams a
+            # single response. Audio is downloaded through the job queue
+            # instead, which writes it to disk like the CLI does.
+            self._send_json({"error": "音频为整册多个文件，请使用下载队列"}, 400)
             return
 
         details, status = dl.get_book_details(book_id, quiet=True)
