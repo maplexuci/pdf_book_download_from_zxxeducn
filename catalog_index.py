@@ -21,9 +21,25 @@ import json
 import re
 import threading
 import time
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import pdf_book_download_from_zxxeducn as dl
+
+
+def _overrides_stamp() -> float:
+    """
+    Modification time of the hand-kept overrides.
+
+    Cached alongside the index so that editing catalogue_overrides.json takes
+    effect on the next run. Without this a fact typed into that file sits there
+    doing nothing until the week-long cache expires, which is the one thing the
+    file exists to avoid.
+    """
+    try:
+        return OVERRIDES_PATH.stat().st_mtime
+    except OSError:
+        return 0.0
 
 
 def _notify(on_status: Optional[Callable[..., None]], **fields: Any) -> None:
@@ -35,7 +51,7 @@ INDEX_PATH = dl.CACHE_DIR / "web_index.json"
 INDEX_MAX_AGE = 7 * 24 * 3600
 # Bumped whenever an entry gains or changes a field, so stale caches written by
 # an older build are rebuilt instead of served with a shape the UI cannot use.
-INDEX_SCHEMA = 10
+INDEX_SCHEMA = 14
 
 # Platform tag dimensions, in the order the UI cascades them.
 DIMENSIONS: List[Tuple[str, str, str]] = [
@@ -168,7 +184,8 @@ def _inherit_parent_tags(entries: List[Dict[str, Any]], books: List[Dict[str, An
             continue
         for key in keys:
             entry[key] = list(inherited[key])
-        entry["tags_inherited"] = True
+            if inherited[key]:
+                entry.setdefault("tag_sources", {})[key] = "course"
         filled += 1
     return filled
 
@@ -248,6 +265,175 @@ def _mark_duplicates(entries: List[Dict[str, Any]]) -> Tuple[int, int]:
     return marked, alternates
 
 
+OVERRIDES_PATH = Path(__file__).resolve().parent / "catalogue_overrides.json"
+
+# "（三年级起点）" says where a series begins, not which grade this book is.
+_SERIES_START = re.compile(r"[（(][一二三四五六七八九十\d]+年级起点[）)]")
+
+# Dimensions whose value appears verbatim in a title often enough to be worth
+# reading off it, with the accuracy each rule scores against the 3142 rows the
+# platform tagged itself. 学科 is restricted to bracket-free values: the platform
+# tags some rows 英语 and others 英语（三年级起点）, and guessing between them is
+# what dragged an unrestricted match down to 72%.
+_TITLE_RULES = {"version": "raw", "stage": "stripped", "grade": "stripped",
+                "volume": "raw", "subject": "plain"}
+
+
+def _tags_from_title(entries: List[Dict[str, Any]], vocab_by_dim: Dict[str, set]) -> int:
+    """
+    Read a row's own title for 分类 it never declared.
+
+    A title like 义务教育教科书·英语 三年级上册 states the 学科, 年级 and 册次
+    outright, and most titles carry the publisher as a prefix. Values are matched
+    against the vocabulary the tagged rows establish, never invented, and only
+    empty dimensions are filled.
+    """
+    filled = 0
+    for entry in entries:
+        title = entry.get("title") or ""
+        stripped = _SERIES_START.sub("", title)
+        for key, mode in _TITLE_RULES.items():
+            if entry.get(key):
+                continue
+            hay = stripped if mode == "stripped" else title
+            found = [v for v in vocab_by_dim.get(key, ())
+                     if v and v in hay and not (mode == "plain" and "（" in v)]
+            if not found:
+                continue
+            entry[key] = [max(found, key=len)]
+            entry.setdefault("tag_sources", {})[key] = "title"
+            filled += 1
+    return filled
+
+
+def _version_from_pdf_name(entries: List[Dict[str, Any]],
+                           children: Dict[str, Any]) -> Tuple[int, Dict[str, int]]:
+    """
+    Some PDFs are stored under a filename that ends with the publisher:
+    義務教育教科書•体育与健康_八年级_全一册_科学出版社.pdf. That is the only place
+    the publisher of these rows is written down.
+
+    The name is not the 版本 tag though, and the mapping cannot be learned from
+    the data - catalogued books' filenames end in a timestamp, not a publisher -
+    so it comes from the hand-kept table in catalogue_overrides.json. Names with
+    no mapping yet are counted and returned, not guessed at.
+    """
+    try:
+        table = (json.loads(OVERRIDES_PATH.read_text(encoding="utf-8"))
+                 .get("publishers") or {})
+    except (OSError, json.JSONDecodeError):
+        table = {}
+
+    unmapped: Dict[str, int] = {}
+    filled = 0
+    for entry in entries:
+        if entry.get("version"):
+            continue
+        record = children.get(entry["id"])
+        if not record:
+            continue
+        name = None
+        for item in (record.get("ti_items") or []):
+            if item.get("ti_format") != "pdf":
+                continue
+            path = item.get("ti_storage") or (item.get("ti_storages") or [""])[0]
+            tail = path.rsplit("/", 1)[-1]
+            if tail.endswith(".pdf"):
+                name = tail[:-4]
+            break
+        if not name or "_" not in name:
+            continue
+        publisher = name.rsplit("_", 1)[-1]
+        if not publisher.endswith("出版社"):
+            continue                      # a timestamp or a title, not a publisher
+        rule = table.get(publisher)
+        if isinstance(rule, str):
+            rule = {"version": rule, "source": "confirmed"}
+        if not rule or not rule.get("version"):
+            unmapped[publisher] = unmapped.get(publisher, 0) + 1
+            continue
+        entry["version"] = [rule["version"]]
+        # a mapping narrowed by cross-referencing 学科 is an inference, and must
+        # not borrow the label meant for values a human actually checked
+        entry.setdefault("tag_sources", {})["version"] = rule.get("source") or "derived"
+        filled += 1
+    return filled, unmapped
+
+
+_FIVE_FOUR = re.compile(r"[（(]?五[•·・.]?四学制[）)]?")
+_SPECIAL_SCHOOL = ("聋校", "培智", "盲校")
+_PRIMARY_GRADES, _JUNIOR_GRADES = "一二三四五六", "七八九"
+
+
+def _stage_from_structure(entries: List[Dict[str, Any]]) -> int:
+    """
+    Derive 学段 from the 年级 and what the title says about the school system.
+
+    学段 is almost never written in a title, so vocabulary matching finds it for
+    only 485 rows, and 年级 alone cannot settle it - 三年级 spans 小学,
+    小学（五•四学制）and 特殊教育. Combining the two does: the title says whether
+    this is a 五•四学制 or special-school edition, and the grade says how far
+    through. Note 六年级 is already 初中 under 五•四学制, where primary school
+    ends at 五年级 - ignoring that was the entire error rate of the first
+    version. Scores 99.5% against the 3142 rows that declare 学段 (2849 right,
+    13 wrong, 280 declined).
+    """
+    filled = 0
+    for entry in entries:
+        if entry.get("stage"):
+            continue
+        title = entry.get("title") or ""
+        grade = (entry.get("grade") or [""])[0]
+        if any(mark in title for mark in _SPECIAL_SCHOOL):
+            stage = "特殊教育"
+        elif grade.startswith("高") or "高中" in grade:
+            stage = "高中"
+        elif "年级" not in grade or grade[:1] not in _PRIMARY_GRADES + _JUNIOR_GRADES:
+            continue
+        else:
+            five_four = bool(_FIVE_FOUR.search(title))
+            junior = grade[:1] in _JUNIOR_GRADES or (five_four and grade[:1] == "六")
+            stage = ("初中" if junior else "小学") + ("（五•四学制）" if five_four else "")
+        entry["stage"] = [stage]
+        entry.setdefault("tag_sources", {})["stage"] = "derived"
+        filled += 1
+    return filled
+
+
+def _apply_overrides(entries: List[Dict[str, Any]], books: List[Dict[str, Any]]) -> int:
+    """
+    Facts established by hand, which win over everything derived.
+
+    Some 版本 values are stated nowhere a request can reach them - not on the
+    row, not on its parent (403), not in any listing - and were read off the
+    platform's own pages. Recording them here makes them confirmed rather than
+    guessed, and keeps them from being silently re-derived.
+    """
+    try:
+        data = json.loads(OVERRIDES_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return 0
+    by_course = data.get("courses") or {}
+    by_book = data.get("books") or {}
+    if not by_course and not by_book:
+        return 0
+
+    parent_id = {b.get("id"): (b.get("teachmeterial_ids") or [None])[0] for b in books}
+    applied = 0
+    for entry in entries:
+        rules = dict(by_course.get(parent_id.get(entry["id"]) or "", {}))
+        rules.update(by_book.get(entry["id"], {}))
+        if not rules:
+            continue
+        for key, value in rules.items():
+            if key not in {k for k, _, _ in DIMENSIONS}:
+                continue
+            entry[key] = [value] if isinstance(value, str) else list(value)
+            entry.setdefault("tag_sources", {})[key] = "confirmed"
+        applied += 1
+    return applied
+
+
 def _infer_from_title_twins(entries: List[Dict[str, Any]]) -> int:
     """
     Last resort for a row no parent can describe: agree-only consensus across
@@ -282,9 +468,9 @@ def _infer_from_title_twins(entries: List[Dict[str, Any]]) -> int:
                 only = next(iter(values))
                 if only:
                     entry[key] = list(only)
+                    entry.setdefault("tag_sources", {})[key] = "namesakes"
                     agreed = True
         if agreed:
-            entry["tags_inferred"] = True
             filled += 1
     return filled
 
@@ -311,6 +497,7 @@ def build_index(refresh: bool = False,
                 cached = json.loads(INDEX_PATH.read_text(encoding="utf-8"))
                 if (time.time() - cached.get("generated", 0) < INDEX_MAX_AGE
                         and cached.get("schema") == INDEX_SCHEMA
+                        and cached.get("overrides_stamp") == _overrides_stamp()
                         and cached.get("books")):
                     _index = cached["books"]
                     _notify(on_status, ready=True, building=False, message="")
@@ -392,18 +579,48 @@ def build_index(refresh: bool = False,
                     }
 
             entry.update(_tags_for(book))
+            entry["tag_sources"] = {key: "declared" for key, _, _ in DIMENSIONS
+                                    if entry.get(key)}
             entries.append(entry)
 
-        # Tags first: _mark_duplicates matches on 分类 as well as title, so it
-        # has to see the inherited and inferred values, not the raw blanks.
+        # Fill gaps from the strongest source down, then let hand-checked facts
+        # override everything. _mark_duplicates matches on 分类 as well as title,
+        # so it must run after all of this, not against the raw blanks.
         filled = _inherit_parent_tags(entries, books, parent_of,
                                       special.get("course_tags") or {},
                                       _dimension_vocabulary(books))
         if filled:
             print(f"🏷️  {filled} child resources took their 分类 from their course")
+
+        vocab_by_dim: Dict[str, set] = {key: set() for key, _, _ in DIMENSIONS}
+        for entry in entries:
+            if entry.get("tag_sources", {}).get("stage") == "declared" or True:
+                for key, _, _ in DIMENSIONS:
+                    if entry.get("tag_sources", {}).get(key) == "declared":
+                        vocab_by_dim[key].update(entry.get(key) or [])
+        from_title = _tags_from_title(entries, vocab_by_dim)
+        if from_title:
+            print(f"📖 {from_title} 分类 values read off the rows' own titles")
+
         inferred = _infer_from_title_twins(entries)
         if inferred:
             print(f"🔖 {inferred} rows took the 分类 their namesakes agree on")
+
+        derived = _stage_from_structure(entries)
+        if derived:
+            print(f"🧭 {derived} 学段 values derived from 年级 + school system")
+
+        named, unmapped = _version_from_pdf_name(entries, special.get("children") or {})
+        if named:
+            print(f"🖉 {named} 版本 values taken from the PDF filename")
+        if unmapped:
+            listed = ", ".join(f"{k} ({v})" for k, v in sorted(unmapped.items()))
+            print(f"❓ publisher names in PDF filenames with no 版本 mapping yet: {listed}")
+
+        confirmed = _apply_overrides(entries, books)
+        if confirmed:
+            print(f"✅ {confirmed} rows carry hand-verified 分类 from "
+                  f"{OVERRIDES_PATH.name}")
 
         dupes, alts = _mark_duplicates(entries)
         if dupes or alts:
@@ -415,6 +632,7 @@ def build_index(refresh: bool = False,
             INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
             INDEX_PATH.write_text(
                 json.dumps({"generated": time.time(), "schema": INDEX_SCHEMA,
+                            "overrides_stamp": _overrides_stamp(),
                             "books": entries}, ensure_ascii=False),
                 encoding="utf-8",
             )

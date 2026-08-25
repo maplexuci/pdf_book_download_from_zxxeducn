@@ -1,0 +1,39 @@
+{
+  "_comment": [
+    "Facts established by hand that no reachable endpoint states.",
+    "Keys under 'courses' are parent course ids (a row's teachmeterial_ids[0]);",
+    "keys under 'books' are a row's own id. Values may set any of",
+    "stage/subject/version/grade/volume. These win over every derived source and",
+    "are reported as confirmed, not guessed - so only put things here you have",
+    "actually verified.",
+    "版本 for these two was read off the platform's own book page by the user,",
+    "2026-08-24; both are 英语 titles whose own record carries no publisher.",
+    "'publishers' maps the publisher name some PDF filenames end with onto the platform's 版本 tag. A plain string, or {'version': ..., 'source': 'confirmed'|'derived'}. 'derived' entries were narrowed by cross-referencing 学科 and are labelled as inferences; only set 'confirmed' for a value a human actually verified."
+  ],
+  "courses": {
+    "4170023b-4c99-91b2-e233-cc17e7d2fd41": {
+      "version": "北师大版"
+    },
+    "04e91437-2ac4-69dd-29f1-6d211417043b": {
+      "version": "北师大版"
+    }
+  },
+  "books": {},
+  "publishers": {
+    "上海教育出版社": {
+      "version": "沪教版",
+      "source": "confirmed",
+      "evidence": "沪教版 is the only one of 8 沪* imprints that publishes 体育与健康 (33 books); verified by the user 2026-08-24"
+    },
+    "科学出版社": {
+      "version": "科学社版",
+      "source": "confirmed",
+      "evidence": "sole 科学* imprint publishing 体育与健康 (39 books); verified by the user 2026-08-24"
+    },
+    "未来出版社": {
+      "version": "未来社版",
+      "source": "confirmed",
+      "evidence": "sole 未来* imprint publishing 体育与健康 (32 books); verified by the user 2026-08-24"
+    }
+  }
+}
