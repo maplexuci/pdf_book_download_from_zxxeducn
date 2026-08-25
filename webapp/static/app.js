@@ -8,7 +8,9 @@ const state = {
   filters: {},             // active dimension selections
   q: '', fmt: '', kind: '',
   page: 1, pageSize: 50, total: 0,
+  books: [],               // the rows the last refresh returned
   selected: new Map(),     // id -> {id,title,formats}
+  expanded: new Set(),     // ids of course bundles showing their children
   jobs: new Map(),
 };
 
@@ -25,6 +27,40 @@ function queryString(extra = {}) {
   if (state.kind) p.set('kind', state.kind);
   for (const [k, v] of Object.entries(extra)) p.set(k, v);
   return p.toString();
+}
+
+// ---------------------------------------------------------------- history
+
+// The view is fully described by the query string, so every filter, search and
+// page change becomes a history entry: Back steps through the view instead of
+// leaving the app, and a filtered view survives a reload or a shared link.
+function locationQuery() {
+  const p = new URLSearchParams(queryString());
+  if (state.page > 1) p.set('page', String(state.page));
+  return p.toString();
+}
+
+function syncHistory(mode) {
+  if (mode === 'none') return;
+  const qs = locationQuery();
+  const url = qs ? `${location.pathname}?${qs}` : location.pathname;
+  if (url === location.pathname + location.search) return;
+  if (mode === 'replace') history.replaceState(null, '', url);
+  else history.pushState(null, '', url);
+}
+
+function readLocation() {
+  const p = new URLSearchParams(location.search);
+  state.filters = {};
+  for (const key of DIM_ORDER) if (p.get(key)) state.filters[key] = p.get(key);
+  state.q = p.get('q') || '';
+  state.fmt = p.get('fmt') || '';
+  state.kind = p.get('kind') || '';
+  state.page = Math.max(1, parseInt(p.get('page'), 10) || 1);
+  // the dimension selects are restored by fillFacets() from state.filters
+  $('q').value = state.q;
+  $('fmt').value = state.fmt;
+  $('kind').value = state.kind;
 }
 
 async function getJSON(url) {
@@ -84,11 +120,18 @@ function badgesFor(book) {
   for (const [kind, size] of Object.entries(book.formats || {})) {
     bits.push(`<span class="badge ${kind}">${FMT_LABEL[kind] || kind} ${fmtSize(size)}</span>`);
   }
+  if ((book.alternates || []).length) {
+    const identical = book.alternates.every((a) => a.same_file);
+    bits.push(`<span class="badge alternate">♊ ${identical ? '同一文件重复' : '同名多版本'}</span>`);
+  }
   if (!bits.length) {
     if (book.kind === 'course') {
       const n = (book.children || []).length;
       bits.push(`<span class="badge course">📦 课程合集</span>`);
       bits.push(`<span class="muted small">含 ${n} 本可下载教材</span>`);
+    } else if (book.kind === 'duplicate') {
+      bits.push('<span class="badge duplicate">♻️ 本条无文件</span>');
+      bits.push(`<span class="muted small">见 #${book.duplicate_of.seq}</span>`);
     } else {
       bits.push('<span class="badge missing">⚠️ 缺失·无法解析</span>');
     }
@@ -97,7 +140,162 @@ function badgesFor(book) {
 }
 
 function tagsFor(book) {
-  return DIM_ORDER.map((k) => (book[k] || [])[0]).filter(Boolean).join(' · ') || '<span class="muted">未标注</span>';
+  const tags = DIM_ORDER.map((k) => (book[k] || [])[0]).filter(Boolean).join(' · ');
+  if (!tags) return '<span class="muted">未标注</span>';
+  // say so when the platform left the row untagged and we supplied the 分类
+  if (book.tags_inherited) {
+    return `<span class="inherited" title="该资源本身未标注，此分类继承自其所属课程">`
+         + `↑ ${tags}</span>`;
+  }
+  if (book.tags_inferred) {
+    return `<span class="inferred" title="该资源及其所属课程均未标注；此分类取自同名资源一致的标注，仅供参考">`
+         + `≈ ${tags}</span>`;
+  }
+  return tags;
+}
+
+function checkboxCell(book) {
+  const cell = document.createElement('td');
+  const box = document.createElement('input');
+  box.type = 'checkbox';
+  box.checked = state.selected.has(book.id);
+  box.disabled = !Object.keys(book.formats || {}).length;
+  box.addEventListener('change', () => {
+    if (box.checked) state.selected.set(book.id, book);
+    else state.selected.delete(book.id);
+    renderSelection();
+  });
+  cell.appendChild(box);
+  return cell;
+}
+
+function downloadCell(book) {
+  const cell = document.createElement('td');
+  cell.className = 'c-act';
+  for (const kind of Object.keys(book.formats || {})) {
+    const link = document.createElement('a');
+    link.href = `/api/download/${encodeURIComponent(book.id)}?fmt=${kind}`
+              + `&title=${encodeURIComponent(book.title)}`;
+    link.innerHTML = `<button class="mini">${FMT_LABEL[kind] || kind}</button>`;
+    cell.appendChild(link);
+  }
+  return cell;
+}
+
+function bundleToggle(book) {
+  const open = state.expanded.has(book.id);
+  const button = document.createElement('button');
+  button.className = 'mini toggle';
+  button.setAttribute('aria-expanded', open ? 'true' : 'false');
+  button.textContent = open ? `▾ 收起子书单`
+                            : `▸ 展开 ${book.children.length} 本子教材`;
+  button.addEventListener('click', () => {
+    if (open) state.expanded.delete(book.id);
+    else state.expanded.add(book.id);
+    renderRows(state.books);            // re-render in place, no reload
+  });
+  return button;
+}
+
+function bookRow(book) {
+  const tr = document.createElement('tr');
+  if (book.kind === 'missing') tr.className = 'row-missing';
+  if (book.kind === 'duplicate') tr.className = 'row-duplicate';
+  if (book.kind === 'course') tr.className = 'row-course';
+
+  const seq = document.createElement('td');
+  seq.className = 'c-seq';
+  seq.textContent = book.seq;
+
+  const title = document.createElement('td');
+  title.className = 'title-cell';
+  title.textContent = book.title;
+  if (book.kind === 'course' && (book.children || []).length) {
+    const bar = document.createElement('div');
+    bar.className = 'child-links';
+    bar.appendChild(bundleToggle(book));
+    title.appendChild(bar);
+  }
+  if (book.kind === 'missing') {
+    const note = document.createElement('div');
+    note.className = 'child-links muted';
+    note.textContent = '平台未提供可解析的文件（其所属课程不在目录中）';
+    title.appendChild(note);
+  }
+  if (book.kind === 'duplicate') {
+    // the file exists, just on another row: send the reader there rather than
+    // implying the book cannot be had
+    const note = document.createElement('div');
+    note.className = 'child-links muted';
+    const other = Object.entries(book.duplicate_of.formats || {})
+      .map(([k, v]) => `${FMT_LABEL[k] || k} ${fmtSize(v)}`).join('、');
+    note.append(`本条记录没有任何文件；平台把同一本书发布了两次，文件挂在另一条上（${other}）：`);
+    const jump = document.createElement('a');
+    jump.textContent = `#${book.duplicate_of.seq} 可下载`;
+    jump.title = '跳转到有文件的那条记录';
+    jump.addEventListener('click', () => {
+      state.q = book.title; state.kind = ''; state.page = 1;
+      $('q').value = book.title; $('kind').value = '';
+      refresh();
+    });
+    note.appendChild(jump);
+    title.appendChild(note);
+  }
+
+  // both copies have a file: say so, with sizes, so a bulk download is not
+  // silently the same book twice
+  for (const alt of book.alternates || []) {
+    const note = document.createElement('div');
+    note.className = 'child-links muted';
+    const sizes = Object.entries(alt.formats || {})
+      .map(([k, v]) => `${FMT_LABEL[k] || k} ${fmtSize(v)}`).join('、');
+    note.append(alt.same_file
+      ? '完全相同的文件（大小一字节不差）也发布在另一条记录上：'
+      : '同名同分类的另一条记录，是另一份扫描件（体积不同）：');
+    const jump = document.createElement('a');
+    jump.textContent = `#${alt.seq} ${sizes}`;
+    jump.title = '跳转查看另一版本';
+    jump.addEventListener('click', () => {
+      state.q = book.title; state.kind = ''; state.page = 1;
+      $('q').value = book.title; $('kind').value = '';
+      refresh();
+    });
+    note.appendChild(jump);
+    title.appendChild(note);
+  }
+
+  const tags = document.createElement('td');
+  tags.className = 'muted small';
+  tags.innerHTML = tagsFor(book);
+
+  const files = document.createElement('td');
+  files.innerHTML = badgesFor(book);
+
+  tr.append(checkboxCell(book), seq, title, tags, files, downloadCell(book));
+  return tr;
+}
+
+function childRow(child, index, count) {
+  const tr = document.createElement('tr');
+  tr.className = 'row-child' + (index === count - 1 ? ' row-child-last' : '');
+
+  const seq = document.createElement('td');
+  seq.className = 'c-seq';
+  seq.textContent = child.seq == null ? '' : `#${child.seq}`;
+
+  const title = document.createElement('td');
+  title.className = 'title-cell child-title';
+  title.textContent = child.title;
+
+  const tags = document.createElement('td');
+  tags.className = 'muted small';
+  tags.textContent = '（合集内教材）';
+
+  const files = document.createElement('td');
+  files.innerHTML = badgesFor(child);
+
+  tr.append(checkboxCell(child), seq, title, tags, files, downloadCell(child));
+  return tr;
 }
 
 function renderRows(books) {
@@ -108,72 +306,10 @@ function renderRows(books) {
   }
   tbody.innerHTML = '';
   for (const book of books) {
-    const tr = document.createElement('tr');
-    if (book.kind === 'missing') tr.className = 'row-missing';
-    if (book.kind === 'course') tr.className = 'row-course';
-
-    const check = document.createElement('td');
-    const box = document.createElement('input');
-    box.type = 'checkbox';
-    box.checked = state.selected.has(book.id);
-    box.disabled = !Object.keys(book.formats || {}).length;
-    box.addEventListener('change', () => {
-      if (box.checked) state.selected.set(book.id, book);
-      else state.selected.delete(book.id);
-      renderSelection();
-    });
-    check.appendChild(box);
-
-    const seq = document.createElement('td');
-    seq.className = 'c-seq';
-    seq.textContent = book.seq;
-
-    const title = document.createElement('td');
-    title.className = 'title-cell';
-    title.textContent = book.title;
-    if (book.kind === 'course' && (book.children || []).length) {
-      const links = document.createElement('div');
-      links.className = 'child-links';
-      links.append('内含：');
-      for (const child of book.children) {
-        const a = document.createElement('a');
-        a.textContent = `#${child.seq} ${child.title.slice(0, 24)}`;
-        a.title = '在列表中查看这本教材';
-        a.addEventListener('click', () => {
-          state.q = child.title; state.kind = ''; state.page = 1;
-          $('q').value = child.title; $('kind').value = '';
-          refresh();
-        });
-        links.appendChild(a);
-      }
-      title.appendChild(links);
-    }
-    if (book.kind === 'missing') {
-      const note = document.createElement('div');
-      note.className = 'child-links muted';
-      note.textContent = '平台未提供可解析的文件（其所属课程不在目录中）';
-      title.appendChild(note);
-    }
-
-    const tags = document.createElement('td');
-    tags.className = 'muted small';
-    tags.innerHTML = tagsFor(book);
-
-    const files = document.createElement('td');
-    files.innerHTML = badgesFor(book);
-
-    const actions = document.createElement('td');
-    actions.className = 'c-act';
-    for (const kind of Object.keys(book.formats || {})) {
-      const link = document.createElement('a');
-      link.href = `/api/download/${encodeURIComponent(book.id)}?fmt=${kind}`
-                + `&title=${encodeURIComponent(book.title)}`;
-      link.innerHTML = `<button class="mini">${FMT_LABEL[kind] || kind}</button>`;
-      actions.appendChild(link);
-    }
-
-    tr.append(check, seq, title, tags, files, actions);
-    tbody.appendChild(tr);
+    tbody.appendChild(bookRow(book));
+    if (book.kind !== 'course' || !state.expanded.has(book.id)) continue;
+    const children = book.children || [];
+    children.forEach((child, i) => tbody.appendChild(childRow(child, i, children.length)));
   }
 }
 
@@ -250,8 +386,9 @@ function connectEvents() {
 // ---------------------------------------------------------------- loading
 
 let refreshToken = 0;
-async function refresh() {
+async function refresh(nav = 'push') {
   const token = ++refreshToken;
+  syncHistory(nav);
   try {
     const [facetData, bookData] = await Promise.all([
       getJSON('/api/facets?' + queryString()),
@@ -260,13 +397,17 @@ async function refresh() {
     if (token !== refreshToken) return;   // a newer request already answered
     fillFacets(facetData.facets);
     state.total = bookData.total;
-    renderRows(bookData.books);
+    state.books = bookData.books;
+    renderRows(state.books);
     $('count').textContent = bookData.total.toLocaleString('zh-CN');
     const k = facetData.kinds || {};
     $('kind-summary').innerHTML =
       `　<span class="kind-key">` +
       `<span>✅ 可下载 ${(k.downloadable || 0).toLocaleString('zh-CN')}</span>` +
       `<span>📦 课程合集 ${(k.course || 0).toLocaleString('zh-CN')}</span>` +
+      `<span>♊ 同名多版本 ${(k.alternate || 0).toLocaleString('zh-CN')}</span>` +
+      `<span class="muted">（已含于可下载）</span>` +
+      `<span>♻️ 本条无文件 ${(k.duplicate || 0).toLocaleString('zh-CN')}</span>` +
       `<span style="color:var(--bad)">⚠️ 缺失 ${(k.missing || 0).toLocaleString('zh-CN')}</span>` +
       `</span>`;
     const pages = Math.max(1, Math.ceil(bookData.total / state.pageSize));
@@ -297,12 +438,17 @@ function bindControls() {
   let typing;
   $('q').addEventListener('input', (e) => {
     clearTimeout(typing);
-    typing = setTimeout(() => { state.q = e.target.value.trim(); state.page = 1; refresh(); }, 250);
+    // replace, not push: typing a query would otherwise bury the previous view
+    // under one history entry per keystroke pause
+    typing = setTimeout(() => {
+      state.q = e.target.value.trim(); state.page = 1; refresh('replace');
+    }, 250);
   });
   $('fmt').addEventListener('change', (e) => { state.fmt = e.target.value; state.page = 1; refresh(); });
   $('kind').addEventListener('change', (e) => {
     state.kind = e.target.value; state.page = 1; refresh();
   });
+  window.addEventListener('popstate', () => { readLocation(); refresh('none'); });
   $('reset').addEventListener('click', () => {
     state.filters = {}; state.q = ''; state.fmt = ''; state.kind = ''; state.page = 1;
     $('q').value = ''; $('fmt').value = ''; $('kind').value = '';
@@ -352,5 +498,6 @@ function bindControls() {
   connectEvents();
   await waitForIndex();
   renderDimensionFilters();
-  await refresh();
+  readLocation();
+  await refresh('replace');
 })();

@@ -10,11 +10,13 @@
   --warn: #a35a00;
   --bad: #b3261e;
   --radius: 10px;
+  --child-ink: #6a3fb0;   /* rows nested under a course bundle */
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #14171a; --panel: #1c2024; --ink: #e8eaed; --muted: #9aa3ad;
     --line: #2c3238; --accent: #4d9bff; --ok: #4ec27f; --warn: #d99a3d; --bad: #ef6a60;
+    --child-ink: #c2a6f7;
   }
 }
 * { box-sizing: border-box; }
@@ -109,3 +111,33 @@ tr.row-course td { opacity: .85; }
 .child-links a { color: var(--accent); cursor: pointer; text-decoration: none; margin-right: 8px; }
 .child-links a:hover { text-decoration: underline; }
 .kind-key { display: inline-flex; gap: 12px; flex-wrap: wrap; margin-left: 8px; }
+
+/* course bundles expand in place: one child per row, indented under the parent */
+button.mini.toggle { padding: 1px 8px; font-size: 12px; color: var(--accent); }
+tr.row-child { background: color-mix(in srgb, var(--accent) 4%, transparent); }
+tr.row-child td { border-bottom-color: transparent; }
+tr.row-child-last td { border-bottom: 1px solid var(--line); }
+tr.row-child .c-seq { font-size: 12.5px; color: var(--child-ink); opacity: .8; }
+/* nested rows read in their own colour, so a child is never mistaken for a book
+   listed in its own right */
+tr.row-child .child-title, tr.row-child .badge { color: var(--child-ink); }
+tr.row-child .badge { border-color: color-mix(in srgb, var(--child-ink) 40%, var(--line)); }
+tr.row-child td:nth-child(4) { color: var(--child-ink); opacity: .75; }
+tr.row-child button.mini { color: var(--child-ink); border-color: color-mix(in srgb, var(--child-ink) 35%, var(--line)); }
+tr.row-child button.mini:hover { border-color: var(--child-ink); }
+.child-title {
+  font-weight: 400; padding-left: 26px !important; position: relative;
+}
+.child-title::before {
+  content: "└"; position: absolute; left: 10px; color: var(--child-ink); opacity: .7;
+}
+
+/* a 分类 the row did not declare itself */
+.inherited { color: var(--muted); font-style: italic; cursor: help; }
+/* weaker still: only what same-titled rows agree on */
+.inferred { color: var(--muted); font-style: italic; cursor: help; opacity: .8; }
+
+/* a second entry for a book that is downloadable on another row */
+.badge.duplicate { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, var(--line)); }
+tr.row-duplicate { background: color-mix(in srgb, var(--warn) 6%, transparent); }
+.badge.alternate { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }
