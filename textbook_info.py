@@ -57,6 +57,8 @@ COLUMNS = [
     "Has PPTX",
     "PDF Size (MB)",
     "PPTX Size (MB)",
+    "Audio Tracks",
+    "Audio Size (MB)",
     "Availability",
 ]
 
@@ -152,6 +154,9 @@ def build_rows(entries: Sequence[Dict[str, Any]]) -> List[List[Any]]:
     for entry in entries:
         formats = entry.get("formats") or {}
         pdf, pptx = formats.get("pdf"), formats.get("pptx")
+        # Sizes are the mp3 listing's; the same tracks as ogg run about half
+        # again as large, and the CSV does not claim to have measured those.
+        audio = entry.get("audio") or {}
         children = entry.get("children") or []
         first = lambda key: (entry.get(key) or [""])[0]  # noqa: E731
         rows.append([
@@ -169,6 +174,8 @@ def build_rows(entries: Sequence[Dict[str, Any]]) -> List[List[Any]]:
             "yes" if pptx else "no",
             _megabytes(pdf) if pdf else "",
             _megabytes(pptx) if pptx else "",
+            audio.get("count") or "",
+            _megabytes(audio["size"]) if audio.get("size") else "",
             _availability(entry),
         ])
     return rows
@@ -198,9 +205,12 @@ def save_textbook_info(
     counted = collections.Counter(e.get("kind") for e in entries)
     with_pdf = sum(1 for r in rows if r[COLUMNS.index("Has PDF")] == "yes")
     with_pptx = sum(1 for r in rows if r[COLUMNS.index("Has PPTX")] == "yes")
+    with_audio = [r for r in rows if r[COLUMNS.index("Audio Tracks")]]
     origins = collections.Counter(r[COLUMNS.index("Tags From")] or "(none)" for r in rows)
     print(f"\n💾 Wrote {len(rows)} rows to {csv_path}")
     print(f"   • {with_pdf} with a PDF, {with_pptx} with a PowerPoint deck")
+    print(f"   • {len(with_audio)} with audio "
+          f"({sum(r[COLUMNS.index('Audio Tracks')] for r in with_audio)} tracks)")
     print(f"   • {counted['course']} course bundles (no file of their own; their "
           f"books are separate rows)")
     alts = sum(1 for e in entries if e.get("alternates"))

@@ -272,6 +272,11 @@ class JobManager:
             item["status"] = "running"
         self.publish(job_id)
 
+        if item["fmt"] in dl.AUDIO_KINDS:
+            self._finish(job_id, position, "failed",
+                         "音频为整册多个文件，请用命令行 --format audio 下载")
+            return
+
         details, status = dl.get_book_details(item["id"], quiet=True)
         if details is None:
             self._finish(job_id, position, "failed",
@@ -499,6 +504,11 @@ class Handler(BaseHTTPRequestHandler):
         kind = params.get("fmt", "pdf")
         if kind not in dl.ASSET_KINDS:
             self._send_json({"error": "未知格式"}, 400)
+            return
+        if kind in dl.AUDIO_KINDS:
+            # One book's audio is dozens of files; this endpoint streams one.
+            self._send_json({"error": "音频为整册多个文件，请用命令行 "
+                                      "--format audio 下载"}, 400)
             return
 
         details, status = dl.get_book_details(book_id, quiet=True)

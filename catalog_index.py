@@ -6,6 +6,7 @@ needs to decide what a row IS.
 Built by joining three sources the platform keeps apart:
   - the catalogue part files, for titles and facet tags
   - the downloader's asset index, for which formats each book publishes
+    (and, separately, how much audio it publishes)
   - the course-bundle listings, for children of a compound resource
 
 and then repairing two things the raw data gets wrong: a child of a compound
@@ -51,7 +52,7 @@ INDEX_PATH = dl.CACHE_DIR / "web_index.json"
 INDEX_MAX_AGE = 7 * 24 * 3600
 # Bumped whenever an entry gains or changes a field, so stale caches written by
 # an older build are rebuilt instead of served with a shape the UI cannot use.
-INDEX_SCHEMA = 14
+INDEX_SCHEMA = 15
 
 # Platform tag dimensions, in the order the UI cascades them.
 DIMENSIONS: List[Tuple[str, str, str]] = [
@@ -538,6 +539,12 @@ def build_index(refresh: bool = False,
                 "status": asset.get("status", "error"),
                 "formats": {k: v.get("size", 0) for k, v in formats.items()},
             }
+            # Audio stays outside `formats` on purpose. Everything in there is
+            # one book -> one file, and callers treat it that way - the web UI
+            # renders a download button per key. A book's audio is dozens of
+            # files, so it is its own field and its own affordance.
+            if asset.get("audio"):
+                entry["audio"] = dict(asset["audio"])
 
             # kind: what this row IS, which is what the user needs to see
             #   downloadable - has a file

@@ -4,7 +4,7 @@ Textbook Downloader for the National Smart Education Platform (国家中小学�
 
 Downloads the freely published textbook files from basic.smartedu.cn.
 
-Version: 3.2.0
+Version: 3.3.0
 
 How it works
 ------------
@@ -19,6 +19,21 @@ How it works
      - flags `image` / `thumbnail` are folders of page JPEGs, never a file
 4. `ti_storages` point at `*-ndr-private` hosts which return 401; rewriting
    the host to `*-ndr-oversea` makes them publicly fetchable.
+
+Audio is published somewhere else entirely. A book's own details JSON never
+mentions it; the site fetches AUDIO_PATH per book id, which returns a LIST of
+`listening` records, each with its own ti_items. So audio is one book -> many
+files, not the one book -> one file the rest of this module assumes, and it
+gets its own resolver (`audio_tracks`) rather than going through `pick_asset`.
+
+The flag that works is the opposite of the PDF case: for audio, `source`
+(mp3 or wav) returns 403 on every mirror, and the items that actually serve are
+`href` (mp3) and `href-ogg` (ogg). AUDIO_FLAGS records that, and audio picking
+is restricted to those flags rather than merely preferring them.
+
+317 of the 3791 catalogued books carry audio - 18158 tracks, 33.7 GiB as mp3 -
+and every one of them is a language textbook (英语 270, 法语 18, 西班牙语 12,
+德语 9, 俄语 5, 日语 3).
 
 Special-education titles are published as `thematic_course` bundles rather
 than standalone documents. The child document's own id returns 403 on
@@ -65,6 +80,11 @@ DETAILS_PATH = "/zxx/ndrv2/resources/tch_material/details/{book_id}.json"
 # child's own id 403s on DETAILS_PATH, which is why these looked unavailable.
 SPECIAL_EDU_PATH = "/zxx/ndrs/special_edu/thematic_course/{course_id}/resources/list.json"
 
+# A book's audio, which is nowhere in its details JSON. Returns a list of
+# `listening` records, each carrying its own ti_items. This is the request the
+# 教材 detail page fires; there is no other route to these files.
+AUDIO_PATH = "/zxx/ndrs/resources/{book_id}/relation_audios.json"
+
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -77,23 +97,60 @@ HEADERS = {
 }
 
 # Downloadable asset kinds. `aliases` are the ti_format values that count as
-# this kind; `magic` are the leading bytes a valid file must start with.
+# this kind; `magic` are the leading bytes a valid file must start with;
+# `source` is where the item is found - a book's own details JSON, or the
+# separate per-book audio listing.
 ASSET_KINDS: Dict[str, Dict[str, Any]] = {
     "pdf": {
         "aliases": {"pdf"},
         "magic": (b"%PDF",),
         "label": "PDF",
+        "source": "details",
     },
     "pptx": {
         # .pptx is a zip container, hence the PK signature.
         "aliases": {"pptx", "ppt"},
         "magic": (b"PK\x03\x04", b"PK\x05\x06", b"\xd0\xcf\x11\xe0"),
         "label": "PowerPoint",
+        "source": "details",
+    },
+    "mp3": {
+        "aliases": {"mp3"},
+        # An ID3 tag, or a bare MPEG frame sync for a file without one.
+        "magic": (b"ID3", b"\xff\xfb", b"\xff\xf3", b"\xff\xf2"),
+        "label": "MP3 音频",
+        "source": "audio",
+    },
+    "ogg": {
+        "aliases": {"ogg"},
+        "magic": (b"OggS",),
+        "label": "OGG 音频",
+        "source": "audio",
     },
 }
 
+DOCUMENT_KINDS = tuple(k for k, v in ASSET_KINDS.items() if v["source"] == "details")
+AUDIO_KINDS = tuple(k for k, v in ASSET_KINDS.items() if v["source"] == "audio")
+
 # When several items share a format, prefer the one filed under `source`.
 FLAG_PRIORITY = {"source": 0, "pdf": 1, "pptx": 1}
+
+# Audio inverts that rule, so it gets its own table - and this one is an
+# allow-list, not a preference. Measured 2026-08-25 across four publishers:
+# the `source` item (mp3 or wav) answers 403 on every mirror, while `href`
+# and `href-ogg` serve the full file at the byte count ti_size declares. The
+# `-clip` variants are the same recording a few hundred bytes shorter; they
+# are the fallback, not the pick. Never widen this to `source`.
+AUDIO_FLAGS: Dict[str, Tuple[str, ...]] = {
+    "mp3": ("href", "href-clip"),
+    "ogg": ("href-ogg", "href-ogg-clip"),
+}
+
+# 409 of the 18158 track titles, across 21 books, end in ".mp3" - the source
+# filename leaking into the title - and would otherwise be filed as
+# "… .mp3.mp3". Stripped whatever encoding was asked for, because the suffix
+# names the platform's file rather than the one being written here.
+AUDIO_TITLE_SUFFIX = re.compile(r"\.(mp3|ogg|wav|m4a)$", re.IGNORECASE)
 
 # A real textbook file is never this small; anything smaller is an error page.
 MIN_ASSET_BYTES = 20 * 1024
@@ -123,6 +180,10 @@ SPECIAL_EDU_INDEX_PATH = CACHE_DIR / "special_edu_index.json"
 # Bumped when the bundle index gains a field or widens the ids it resolves.
 SPECIAL_EDU_SCHEMA = 2
 LEGACY_INDEX_PATH = OUTPUT_DIR / ".asset_index.json"
+# Bumped when an index entry gains a field. A cached index written before the
+# bump is missing that field for every book, and no amount of reconciling adds
+# it - only a full rescan does, so a mismatch forces one.
+ASSET_INDEX_SCHEMA = 2
 # A warm index is reconciled against the live catalogue on every load - seqs
 # re-derived, withdrawn books dropped, new and revised ones probed - so it does
 # not go stale merely by sitting there. This is the backstop for whatever that
@@ -197,9 +258,17 @@ def human_size(num_bytes: float) -> str:
 
 
 def resolve_formats(spec: str) -> List[str]:
-    """Turn a --format value into an ordered list of asset kinds."""
+    """
+    Turn a --format value into an ordered list of asset kinds.
+
+    `all` takes one audio encoding, not both: the ogg listing is the same
+    recordings as the mp3 one, half again as large, so fetching both would
+    double the bytes for nothing. `--format ogg` asks for it explicitly.
+    """
     if spec == "all":
-        return list(ASSET_KINDS)
+        return list(DOCUMENT_KINDS) + ["mp3"]
+    if spec == "audio":
+        return ["mp3"]
     return [spec]
 
 
@@ -500,8 +569,13 @@ def pick_asset(details: Dict[str, Any], kind: str) -> Optional[Dict[str, Any]]:
 
 
 def available_kinds(details: Dict[str, Any]) -> List[str]:
-    """Which asset kinds this book actually publishes."""
-    return [kind for kind in ASSET_KINDS if pick_asset(details, kind)]
+    """
+    Which document kinds this book's details JSON publishes.
+
+    Audio is deliberately not consulted here: it is not in `ti_items`, and
+    answering for it would cost a second request per call.
+    """
+    return [kind for kind in DOCUMENT_KINDS if pick_asset(details, kind)]
 
 
 def storages_to_public_urls(storages: List[str]) -> List[str]:
@@ -547,6 +621,122 @@ def get_pdf_url(book_id: str) -> Optional[List[str]]:
 
 
 # ---------------------------------------------------------------------------
+# Audio resolution
+#
+# Audio does not go through pick_asset because it is not shaped like the rest:
+# a book's audio is a separate listing of many records, each a track with its
+# own ti_items, so one book resolves to many files.
+# ---------------------------------------------------------------------------
+
+def get_audio_records(
+    book_id: str, session: Optional[requests.Session] = None, quiet: bool = False
+) -> Tuple[List[Dict[str, Any]], str]:
+    """
+    Fetch a book's audio listing.
+
+    Returns (records, status) using the same vocabulary as get_book_details:
+      'ok'         - the listing was served, though it may be empty
+      'restricted' - platform refuses public access (HTTP 401/403)
+      'error'      - network / parse failure
+
+    An empty list under 'ok' is the platform saying this book has no audio,
+    which is the answer for most of the catalogue - not a failure. The books
+    that answer 401/403 are the 体育与健康 titles and course containers, none
+    of which publish audio anywhere else either.
+    """
+    session = session or SESSION
+    last_status = "error"
+    for host in DETAILS_HOSTS:
+        url = f"https://{host}.ykt.cbern.com.cn" + AUDIO_PATH.format(book_id=book_id)
+        try:
+            response = session.get(url, timeout=30)
+        except requests.RequestException as exc:
+            if not quiet:
+                print(f"    ❌ {host}: network error ({exc})")
+            continue
+
+        if response.ok:
+            try:
+                return response.json() or [], "ok"
+            except json.JSONDecodeError:
+                if not quiet:
+                    print(f"    ❌ {host}: audio listing was not valid JSON")
+                continue
+
+        if response.status_code in (401, 403):
+            last_status = "restricted"
+        elif not quiet:
+            print(f"    ❌ {host}: audio listing returned HTTP {response.status_code}")
+
+    return [], last_status
+
+
+def pick_audio_item(record: Dict[str, Any], kind: str) -> Optional[Dict[str, Any]]:
+    """
+    The downloadable item of `kind` in one audio record.
+
+    AUDIO_FLAGS is an allow-list rather than a preference order: a track is
+    also published under `source`, and that item answers 403 on every mirror.
+    Preferring `href` while still falling back to `source` would turn a
+    working download into a failing one, so `source` is never a candidate.
+    """
+    aliases = ASSET_KINDS[kind]["aliases"]
+    order = AUDIO_FLAGS[kind]
+    candidates = [
+        item
+        for item in record.get("ti_items") or []
+        if (item.get("ti_format") or "").lower() in aliases
+        and item.get("ti_file_flag") in order
+        and item.get("ti_storages")
+    ]
+    if not candidates:
+        return None
+    candidates.sort(key=lambda i: order.index(i["ti_file_flag"]))
+    return candidates[0]
+
+
+def audio_track_title(record: Dict[str, Any]) -> str:
+    """What the platform calls this track, e.g. 'Unit 1_Part A_2. Listen and say'."""
+    return (record.get("title")
+            or (record.get("global_title") or {}).get("zh-CN")
+            or record.get("id", "")
+            or "untitled")
+
+
+def audio_tracks(
+    book_id: str,
+    kind: str = "mp3",
+    session: Optional[requests.Session] = None,
+    quiet: bool = False,
+) -> Tuple[List[Dict[str, Any]], str]:
+    """
+    Every downloadable track of `kind` for a book, in the order the listing
+    gives them - which is teaching order, Unit 1 before Unit 2.
+
+    Each track carries its `position` in that listing, counted over all
+    records rather than over the ones that resolved, so a track's number
+    means the same thing whatever format is being fetched. The number is also
+    what keeps a book's files apart: 16 of the 317 books with audio reuse a
+    track title within the same book.
+    """
+    records, status = get_audio_records(book_id, session=session, quiet=quiet)
+    tracks: List[Dict[str, Any]] = []
+    for position, record in enumerate(records, 1):
+        item = pick_audio_item(record, kind)
+        if item is None:
+            continue
+        tracks.append({
+            "position": position,
+            "id": record.get("id", ""),
+            "title": audio_track_title(record),
+            "urls": storages_to_public_urls(item["ti_storages"]),
+            "size": item.get("ti_size") or 0,
+            "flag": item.get("ti_file_flag"),
+        })
+    return tracks, status
+
+
+# ---------------------------------------------------------------------------
 # Asset index (which books publish which formats)
 # ---------------------------------------------------------------------------
 
@@ -565,13 +755,26 @@ def probe_book_formats(seq: int, book: Dict[str, Any]) -> Dict[str, Any]:
         "formats": {},
     }
     if details is not None:
-        for kind in ASSET_KINDS:
+        for kind in DOCUMENT_KINDS:
             item = pick_asset(details, kind)
             if item:
                 entry["formats"][kind] = {
                     "flag": item.get("ti_file_flag"),
                     "size": item.get("ti_size") or 0,
                 }
+
+    # A second request, because a book's audio is nowhere in its details JSON.
+    # It is asked of every book rather than only the language ones: which
+    # subjects publish audio is an observation about today's catalogue, not a
+    # rule the platform states, and guessing would quietly miss the first
+    # 音乐 book that ships a track.
+    tracks, _ = audio_tracks(book_id, "mp3", session=thread_session(), quiet=True)
+    if tracks:
+        entry["audio"] = {
+            "count": len(tracks),
+            "size": sum(track["size"] for track in tracks),
+            "flag": tracks[0]["flag"],
+        }
     return entry
 
 
@@ -599,7 +802,8 @@ def _save_asset_index(entries: List[Dict[str, Any]]) -> None:
     try:
         INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
         INDEX_PATH.write_text(
-            json.dumps({"generated": time.time(), "books": entries}, ensure_ascii=False),
+            json.dumps({"generated": time.time(), "schema": ASSET_INDEX_SCHEMA,
+                        "books": entries}, ensure_ascii=False),
             encoding="utf-8",
         )
         print(f"💾 Asset index cached at {INDEX_PATH}")
@@ -694,7 +898,9 @@ def build_asset_index(workers: int = 12, refresh: bool = False) -> List[Dict[str
         try:
             cached = json.loads(source.read_text(encoding="utf-8"))
             age = time.time() - cached.get("generated", 0)
-            if age < INDEX_MAX_AGE and cached.get("books"):
+            if cached.get("books") and cached.get("schema") != ASSET_INDEX_SCHEMA:
+                print("🔄 Cached index predates the audio column; rescanning")
+            elif age < INDEX_MAX_AGE and cached.get("books"):
                 print(f"🗂️  Using cached asset index ({len(cached['books'])} books, "
                       f"{age / 3600:.0f}h old; --refresh-index to rebuild)")
                 reconciled = _reconcile_asset_index(cached["books"], workers)
@@ -719,15 +925,27 @@ def index_summary(entries: Sequence[Dict[str, Any]]) -> None:
     with_pdf = sum(1 for e in entries if "pdf" in e["formats"])
     with_pptx = sum(1 for e in entries if "pptx" in e["formats"])
     both = sum(1 for e in entries if {"pdf", "pptx"} <= set(e["formats"]))
+    with_audio = [e for e in entries if e.get("audio")]
+    tracks = sum(e["audio"]["count"] for e in with_audio)
     print(f"\n📊 Catalog: {total} books")
     print(f"   • PDF available        : {with_pdf}")
     print(f"   • PowerPoint available : {with_pptx}  (of which {both} also have a PDF)")
+    print(f"   • audio available      : {len(with_audio)}  ({tracks} tracks)")
     print(f"   • no downloadable file : {restricted}")
     if errored:
         print(f"   • metadata unreachable  : {errored}")
 
 
 def books_with_format(entries: Sequence[Dict[str, Any]], kind: str) -> List[Dict[str, Any]]:
+    """
+    The indexed books publishing `kind`.
+
+    Audio is recorded per book rather than per format - the index stores the
+    track count and total bytes of the mp3 listing, and the ogg listing holds
+    the same recordings - so both audio kinds select on the same field.
+    """
+    if kind in AUDIO_KINDS:
+        return [e for e in entries if e.get("audio")]
     return [e for e in entries if kind in e["formats"]]
 
 
@@ -849,6 +1067,57 @@ def download_pdf_with_cdn_fallback(
     return download_asset(pdf_urls, book_name, "pdf", work_path, overwrite)
 
 
+def download_audio(
+    book_name: str,
+    book_id: str,
+    work_path: Path,
+    kind: str = "mp3",
+    overwrite: bool = False,
+    dry_run: bool = False,
+) -> Tuple[bool, str]:
+    """
+    Download every audio track a book publishes, into a folder of its own.
+
+    A book's audio is dozens of small files - 50 at the median, 165 at the
+    most - so they go into `<output>/<book>/` rather than beside the PDFs,
+    numbered by their position in the platform's listing to keep teaching
+    order and to keep repeated titles apart.
+
+    Returns (ok, note), ok being true only if every track landed.
+    """
+    tracks, status = audio_tracks(book_id, kind)
+    if not tracks:
+        if status == "restricted":
+            return False, "audio listing restricted by platform"
+        if status == "error":
+            return False, "audio listing unavailable"
+        return False, "no audio published"
+
+    total = sum(track["size"] for track in tracks)
+    folder = Path(work_path) / sanitize_filename(book_name)
+    print(f"    🎧 {len(tracks)} {kind} tracks, {human_size(total)} → {folder.name}/")
+
+    if dry_run:
+        for track in tracks[:3]:
+            print(f"    🔗 [{kind}] {track['position']:02d} {track['title']}")
+            print(f"        {track['urls'][0]}")
+        if len(tracks) > 3:
+            print(f"    … and {len(tracks) - 3} more (dry run)")
+        return True, f"resolved {len(tracks)} tracks"
+
+    width = max(2, len(str(tracks[-1]["position"])))
+    done = 0
+    for track in tracks:
+        title = AUDIO_TITLE_SUFFIX.sub("", track["title"]).strip()
+        stem = f"{track['position']:0{width}d} {title or track['id']}"
+        if download_asset(track["urls"], stem, kind, str(folder), overwrite, kind):
+            done += 1
+
+    if done == len(tracks):
+        return True, f"{done} tracks"
+    return False, f"only {done}/{len(tracks)} tracks downloaded"
+
+
 def download_book(
     book: Dict[str, Any],
     work_path: Path,
@@ -865,22 +1134,37 @@ def download_book(
     book_id = book.get("id", "")
     print(f"📖 {name}")
 
+    outcome: Dict[str, Tuple[bool, str]] = {}
+
+    # Audio is resolved first and separately: it comes from its own endpoint,
+    # so a book whose details JSON 403s can still have downloadable tracks and
+    # must not be written off before they are asked for.
+    for kind in (k for k in formats if ASSET_KINDS[k]["source"] == "audio"):
+        outcome[kind] = download_audio(name, book_id, work_path, kind, overwrite, dry_run)
+
+    documents = [k for k in formats if ASSET_KINDS[k]["source"] == "details"]
+    if not documents:
+        return [(kind, *outcome[kind]) for kind in formats]
+
     details, status = get_book_details(book_id)
     if details is None:
         if status == "restricted":
             print("    🔒 No downloadable file published (online preview only)")
-            return [(kind, False, "restricted by platform") for kind in formats]
-        print("    ❌ Could not fetch details metadata")
-        return [(kind, False, "details unavailable") for kind in formats]
+            note = "restricted by platform"
+        else:
+            print("    ❌ Could not fetch details metadata")
+            note = "details unavailable"
+        for kind in documents:
+            outcome[kind] = (False, note)
+        return [(kind, *outcome[kind]) for kind in formats]
 
-    results: List[Tuple[str, bool, str]] = []
-    for kind in formats:
+    for kind in documents:
         item = pick_asset(details, kind)
         if item is None:
             offered = available_kinds(details)
             note = f"no {kind} published" + (f" (has: {', '.join(offered)})" if offered else "")
             print(f"    ⚠️ {note}")
-            results.append((kind, False, note))
+            outcome[kind] = (False, note)
             continue
 
         urls = storages_to_public_urls(item["ti_storages"])
@@ -889,13 +1173,13 @@ def download_book(
             print(f"    🔗 [{kind}] {urls[0]}")
             print(f"    ℹ️  flag={item.get('ti_file_flag')} "
                   f"size={human_size(item.get('ti_size') or 0)} (dry run)")
-            results.append((kind, True, "resolved"))
+            outcome[kind] = (True, "resolved")
             continue
 
         ok = download_asset(urls, name, kind, str(work_path), overwrite, extension)
-        results.append((kind, ok, "ok" if ok else "download failed"))
+        outcome[kind] = (ok, "ok" if ok else "download failed")
 
-    return results
+    return [(kind, *outcome[kind]) for kind in formats]
 
 
 # ---------------------------------------------------------------------------
@@ -927,7 +1211,7 @@ def pdf_download(
     overwrite: bool = False,
     dry_run: bool = False,
     formats: Optional[Sequence[str]] = None,
-    all_pptx: bool = False,
+    all_of: Optional[str] = None,
     list_format: Optional[str] = None,
     refresh_index: bool = False,
     filters: Optional[Dict[str, Optional[str]]] = None,
@@ -953,8 +1237,8 @@ def pdf_download(
         print(f"📁 Files are in {work_path}")
         return
 
-    if all_pptx:
-        _download_all_of_format("pptx", work_path, formats, overwrite, dry_run,
+    if all_of:
+        _download_all_of_format(all_of, work_path, formats, overwrite, dry_run,
                                 download_limit, refresh_index)
         print(f"📁 Files are in {work_path}")
         return
@@ -1013,6 +1297,30 @@ def describe_filters(filters: Dict[str, Optional[str]]) -> str:
     return ", ".join(bits)
 
 
+def row_holds(row: Dict[str, Any], kind: str) -> bool:
+    """Does this catalogue row (or index entry) publish `kind`?"""
+    if kind in AUDIO_KINDS:
+        return bool(row.get("audio"))
+    formats = row.get("formats") or {}
+    return kind in formats
+
+
+def row_size(row: Dict[str, Any], kind: str) -> int:
+    """
+    How many bytes of `kind` this row holds.
+
+    Rows come in two shapes - the asset index stores {"size": n} per format,
+    the catalogue index flattens that to the number - and audio lives in its
+    own field for both. Sizes are recorded for the mp3 listing; the ogg
+    listing is the same recordings at roughly half again the size, so an ogg
+    estimate is deliberately not offered here.
+    """
+    if kind in AUDIO_KINDS:
+        return (row.get("audio") or {}).get("size", 0)
+    value = (row.get("formats") or {}).get(kind)
+    return value.get("size", 0) if isinstance(value, dict) else (value or 0)
+
+
 def _row_detail(row: Dict[str, Any]) -> str:
     """The second line of a listing: what this book is and what it duplicates."""
     tags = " · ".join((row.get(dim) or [""])[0] for dim in FILTER_DIMENSIONS
@@ -1031,20 +1339,26 @@ def _row_detail(row: Dict[str, Any]) -> str:
 def _list_mode(kind: str, refresh_index: bool,
                filters: Optional[Dict[str, Optional[str]]] = None) -> None:
     """Print the books publishing the given format, with what each one is."""
-    rows = [r for r in catalog_rows(refresh=refresh_index)
-            if kind in (r.get("formats") or {})]
+    rows = [r for r in catalog_rows(refresh=refresh_index) if row_holds(r, kind)]
     filters = filters or {}
     if describe_filters(filters):
         rows = filter_rows(rows, filters)
         print(f"\n🔎 Filter: {describe_filters(filters)}")
 
-    total = sum(r["formats"][kind] for r in rows)
-    print(f"\n📄 {len(rows)} books publish a {ASSET_KINDS[kind]['label']} "
-          f"file ({human_size(total)} total):\n")
+    audio = kind in AUDIO_KINDS
+    total = sum(row_size(r, kind) for r in rows)
+    if audio:
+        tracks = sum((r.get("audio") or {}).get("count", 0) for r in rows)
+        print(f"\n🎧 {len(rows)} books publish audio - {tracks} tracks, "
+              f"{human_size(total)} as mp3:\n")
+    else:
+        print(f"\n📄 {len(rows)} books publish a {ASSET_KINDS[kind]['label']} "
+              f"file ({human_size(total)} total):\n")
     for row in rows:
-        others = ", ".join(k for k in row["formats"] if k != kind)
+        others = ", ".join(k for k in (row.get("formats") or {}) if k != kind)
         extra = f"  (+{others})" if others else ""
-        print(f"  #{row['seq']:<5d} {human_size(row['formats'][kind]):>9s}  "
+        count = f"{(row.get('audio') or {}).get('count', 0):>4d} ×" if audio else ""
+        print(f"  #{row['seq']:<5d} {count}{human_size(row_size(row, kind)):>9s}  "
               f"{row['title'][:56]}{extra}")
         print(f"         {_row_detail(row)}")
     if rows:
@@ -1060,14 +1374,14 @@ def _download_filtered(filters: Dict[str, Optional[str]], work_path: Path,
                        limit: Optional[int], refresh_index: bool) -> None:
     """Download every book matching the filters - the CLI's bulk selection."""
     rows = filter_rows(catalog_rows(refresh=refresh_index), filters)
-    rows = [r for r in rows if any(f in (r.get("formats") or {}) for f in formats)]
+    rows = [r for r in rows if any(row_holds(r, f) for f in formats)]
     if not rows:
         print(f"❌ Nothing matches {describe_filters(filters)} in {', '.join(formats)}")
         return
     if limit:
         rows = rows[:limit]
 
-    estimate = sum(r["formats"][f] for r in rows for f in formats if f in r["formats"])
+    estimate = sum(row_size(r, f) for r in rows for f in formats)
     print(f"\n📦 {len(rows)} books match {describe_filters(filters)}; "
           f"fetching {', '.join(formats)} (~{human_size(estimate)})")
     dupes = sum(1 for r in rows if r.get("alternates"))
@@ -1099,15 +1413,17 @@ def _download_all_of_format(
     """Dedicated route: download every book that publishes `kind`."""
     entries = build_asset_index(refresh=refresh_index)
     matches = books_with_format(entries, kind)
+    available = len(matches)
     if limit:
         matches = matches[:limit]
 
     # Default to this route's own format; an explicit --format wins.
     wanted = list(formats) if formats else [kind]
-    estimate = sum(
-        entry["formats"][k]["size"] for entry in matches for k in wanted if k in entry["formats"]
-    )
-    print(f"\n📦 {len(matches)} books publish a {ASSET_KINDS[kind]['label']} file; "
+    estimate = sum(row_size(entry, k) for entry in matches for k in wanted)
+    # Say how many books publish this, not just how many --limit left, or the
+    # line reads as though the catalogue held only the capped number.
+    capped = f" - taking the first {len(matches)}" if len(matches) < available else ""
+    print(f"\n📦 {available} books publish {ASSET_KINDS[kind]['label']}{capped}; "
           f"fetching {', '.join(wanted)} (~{human_size(estimate)})")
 
     results: List[Tuple[str, bool, str]] = []
@@ -1126,11 +1442,16 @@ def _download_by_book_id(book_id: str, work_path: Path, formats: Sequence[str],
     print(f"🔍 Book ID: {book_id}")
     details, status = get_book_details(book_id)
     if details is None:
-        if status == "restricted":
-            print("🔒 No downloadable file published (online preview only)")
-        else:
-            print("❌ Could not fetch details metadata for this ID")
-        return
+        # Audio hangs off its own endpoint, so a book whose details JSON is
+        # refused may still have tracks. Only give up when the caller wanted
+        # something that does come from the details.
+        if any(ASSET_KINDS[k]["source"] == "details" for k in formats):
+            if status == "restricted":
+                print("🔒 No downloadable file published (online preview only)")
+            else:
+                print("❌ Could not fetch details metadata for this ID")
+            return
+        details = {"id": book_id}
 
     details.setdefault("id", book_id)
     name = book_display_name(details)
@@ -1238,6 +1559,7 @@ DOWNLOAD MODES
   --range A-B      books A through B (also accepts a single number)
   --book-id UUID   one book by its platform id
   --all-pptx       every book that publishes a PowerPoint deck (252 of them)
+  --all-audio      every book that publishes audio (317 of them, 33.7 GB)
   --single N       legacy: only the Nth book encountered
   --limit N        legacy: stop after N books (also caps --all-pptx)
   --table N        legacy: start at catalog N (0-based)
@@ -1246,16 +1568,29 @@ DOWNLOAD MODES
 FORMATS
   --format pdf     PDF only (default)
   --format pptx    PowerPoint only
-  --format all     every format the book publishes
+  --format audio   the book's audio tracks as mp3
+  --format ogg     the same tracks as ogg (~50% larger; mp3 unless you care)
+  --format all     pdf, pptx and mp3 - one audio encoding, not both
 
   Of the 3743 catalogued titles, 3384 publish a PDF and 252 publish a .pptx
   deck under flag `source` alongside a PDF under flag `pdf`. `--format` works
   with every mode above.
 
+AUDIO
+  317 books publish audio - 18158 tracks, 33.7 GB as mp3 - and all of them are
+  language textbooks (英语 270, 法语 18, 西班牙语 12, 德语 9, 俄语 5, 日语 3).
+  It comes from a separate per-book listing, not from the book's own metadata,
+  so a book with no PDF can still have tracks.
+
+  A book's tracks go into a folder of their own, numbered in the platform's
+  order:  ~/Downloads/textbook_download/<book>/01 Unit 1_Part A.mp3
+
 LISTING
   --list-pptx      list the books that publish a PowerPoint deck
   --list-pdf       list the books that publish a PDF
-  --refresh-index  rebuild the cached format index (~3700 requests)
+  --list-audio     list the books that publish audio, with track counts
+  --refresh-index  rebuild the cached format index (~7500 requests: the
+                   details JSON and the audio listing, per book)
 
   For a browsable inventory of the whole catalogue - one row per book with
   its PDF/PPTX availability and sizes - run `python textbook_info.py`, which
@@ -1272,6 +1607,9 @@ EXAMPLES
   python pdf_book_download_from_zxxeducn.py --all-pptx
   python pdf_book_download_from_zxxeducn.py --all-pptx --format all --limit 5
   python pdf_book_download_from_zxxeducn.py --sequence 1981 --format pptx
+  python pdf_book_download_from_zxxeducn.py --list-audio
+  python pdf_book_download_from_zxxeducn.py --sequence 93 --format audio
+  python pdf_book_download_from_zxxeducn.py --subject 英语 --format audio --limit 5
 
 NOTES
   359 catalogued entries publish no file of their own: 302 are course
@@ -1286,17 +1624,24 @@ NOTES
     parser.add_argument("--book-id", type=str, help="Download by platform book id (UUID)")
     parser.add_argument("--all-pptx", action="store_true",
                         help="Download every book that publishes a PowerPoint deck")
+    parser.add_argument("--all-audio", action="store_true",
+                        help="Download every book that publishes audio (317 books, 33.7 GB)")
     parser.add_argument("--single", type=int, help="Legacy: download only book number N")
     parser.add_argument("--limit", type=int, help="Legacy: stop after N books")
     parser.add_argument("--table", type=int, default=0, help="Legacy: starting catalog index")
     parser.add_argument("--item", type=int, default=0, help="Legacy: starting item index")
-    parser.add_argument("--format", choices=("pdf", "pptx", "all"), default=None,
-                        help="Which file format(s) to download "
-                             "(default: pdf, or pptx for --all-pptx)")
+    parser.add_argument("--format",
+                        choices=("pdf", "pptx", "audio", "mp3", "ogg", "all"),
+                        default=None,
+                        help="Which file format(s) to download (default: pdf, or "
+                             "the format the --all-* route is named after). "
+                             "'audio' means mp3.")
     parser.add_argument("--list-pptx", action="store_true",
                         help="List books that publish a PowerPoint deck, then exit")
     parser.add_argument("--list-pdf", action="store_true",
                         help="List books that publish a PDF, then exit")
+    parser.add_argument("--list-audio", action="store_true",
+                        help="List books that publish audio, then exit")
     selection = parser.add_argument_group(
         "selection by 分类",
         "Pick books the way the web UI does. Combine freely; with --list-pdf or "
@@ -1320,7 +1665,9 @@ NOTES
 
 def main(argv: Optional[List[str]] = None) -> int:
     args = build_parser().parse_args(argv)
-    list_format = "pptx" if args.list_pptx else ("pdf" if args.list_pdf else None)
+    list_format = ("pptx" if args.list_pptx else
+                   "pdf" if args.list_pdf else
+                   "mp3" if args.list_audio else None)
     try:
         pdf_download(
             table=args.table,
@@ -1333,7 +1680,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             overwrite=args.overwrite,
             dry_run=args.dry_run,
             formats=resolve_formats(args.format) if args.format else None,
-            all_pptx=args.all_pptx,
+            all_of="pptx" if args.all_pptx else ("mp3" if args.all_audio else None),
             list_format=list_format,
             refresh_index=args.refresh_index,
             filters={"stage": args.stage, "subject": args.subject,

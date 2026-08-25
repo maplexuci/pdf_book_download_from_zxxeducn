@@ -62,6 +62,10 @@ titles appear more than once, and many children of a compound resource are title
   Number and the file's size), and a genuine gap - currently **none**. An earlier version
   of this CSV called all 323 of them `restricted by platform`, which read as 323 missing
   books.
+- **Audio Tracks** and **Audio Size (MB)** count what a book publishes through the separate
+  audio listing - 317 books do, all of them language textbooks. The size is the mp3
+  listing's; the same tracks as ogg run about half again as large, and this column does not
+  claim to have measured those.
 - **Same Book As** catches the opposite case: 134 rows where *both* copies have a file,
   either a separate scan of differing size or the very same file twice (marked
   `same file`). Check it before bulk-downloading a filtered set, or you will fetch some
@@ -172,18 +176,44 @@ python3 pdf_book_download_from_zxxeducn.py --all-pptx           # download every
 python3 pdf_book_download_from_zxxeducn.py --all-pptx --format all --limit 5
 ```
 
+#### 6. **Audio** (`--all-audio`)
+317 of the catalogued titles publish audio - 18158 tracks, 33.7 GB as mp3 - and every one
+of them is a language textbook (英语 270, 法语 18, 西班牙语 12, 德语 9, 俄语 5, 日语 3).
+```bash
+python3 pdf_book_download_from_zxxeducn.py --list-audio                 # who has what
+python3 pdf_book_download_from_zxxeducn.py --sequence 93 --format audio # one book
+python3 pdf_book_download_from_zxxeducn.py --subject 英语 --format audio  # a whole 学科
+```
+Audio does not come from the book's own metadata. It has a separate per-book listing
+(`relation_audios.json`), which is why a title with no PDF can still have tracks, and why
+one book resolves to dozens of files rather than one. Those files go into a folder of
+their own, numbered in the platform's order so teaching order survives and two lessons
+that share a title do not overwrite each other:
+
+```
+~/Downloads/textbook_download/接力社版…英语 三年级上册/01 Unit 1_Part A_1. Look, listen and say.mp3
+```
+
+One thing worth knowing if you extend this: for a PDF the downloadable item is the one
+filed under flag `source`, and for audio that same flag answers 403 on every mirror. The
+items that serve are `href` (mp3) and `href-ogg` (ogg), so audio picking is restricted to
+those flags rather than merely preferring them.
+
 #### Formats
 `--format` works with every mode above:
 - `--format pdf`: PDF only (default)
 - `--format pptx`: PowerPoint only
-- `--format all`: every format the book publishes
+- `--format audio`: the book's audio tracks as mp3
+- `--format ogg`: the same tracks as ogg - about 50% larger, so mp3 unless you care
+- `--format all`: pdf, pptx and mp3 - one audio encoding, never both
 
 ```bash
 python3 pdf_book_download_from_zxxeducn.py --sequence 1981 --format pptx
 ```
 
 #### Listing and selection
-- `--list-pptx` / `--list-pdf`: list the books publishing that format. Each row shows its
+- `--list-pptx` / `--list-pdf` / `--list-audio`: list the books publishing that format
+  (`--list-audio` also shows each book's track count). Each row shows its
   学段 · 学科 · 版本 · 年级 · 册次, the course it belongs to when its own title does not say
   (`← #1973 …`), and a ♊/♻️ marker when another Number holds the same book
 - `--stage` / `--subject` / `--version` / `--grade` / `--volume` / `--search`: pick books the
@@ -194,7 +224,8 @@ python3 pdf_book_download_from_zxxeducn.py --sequence 1981 --format pptx
 python3 pdf_book_download_from_zxxeducn.py --list-pdf --subject 英语 --version 北师大版
 python3 pdf_book_download_from_zxxeducn.py --subject 英语 --version 北师大版 --grade 三年级
 ```
-- `--refresh-index`: rebuild the cached format index (~3700 requests, cached for 7 days)
+- `--refresh-index`: rebuild the cached format index (~7500 requests - the details JSON
+  and the audio listing, per book - cached for 7 days)
   in `~/Library/Caches/textbook-downloader/` (macOS) or `~/.cache/textbook-downloader/`,
   deliberately outside the downloads folder so clearing downloads does not force a rescan
 
@@ -212,6 +243,7 @@ Surveyed across all 3743 catalogued titles:
 |---|---|
 | PDF available | 3384 |
 | PowerPoint available | 252 (all 252 also have a PDF) |
+| Audio available | 317 (18158 tracks, 33.7 GB as mp3) |
 | No file of their own | 359 (302 course containers + 57 unresolved) |
 
 #### Special-Education Titles, And What Is Left
@@ -336,8 +368,10 @@ python3 textbook_info.py --pptx-only     # 仅含 PowerPoint 课件的资源
 python3 pdf_book_download_from_zxxeducn.py --sequence 1981 --format pptx
 ```
 
-其余列可在下载前告知预期内容：`Has PDF` / `Has PPTX` 及其文件大小，以及
-`Availability`——用于区分"该资源本就没有课件"与"平台完全禁止下载"
+其余列可在下载前告知预期内容：`Has PDF` / `Has PPTX` 及其文件大小，
+`Audio Tracks` / `Audio Size (MB)`——该教材通过音频列表接口发布的音轨数量与总大小
+（317 册有音频，全部为语言类教材；大小按 mp3 计，ogg 体积约大一半，此列不代表已测量 ogg），
+以及 `Availability`——用于区分"该资源本就没有课件"与"平台完全禁止下载"
 （`restricted by platform`）两种情况。
 
 部分资源属于某个复合资源的子节点，而其父级并未出现在目录中；这类资源的单本详情接口
@@ -436,11 +470,34 @@ python3 pdf_book_download_from_zxxeducn.py --all-pptx           # 下载全部�
 python3 pdf_book_download_from_zxxeducn.py --all-pptx --format all --limit 5
 ```
 
+#### 6. **音频** (`--all-audio`)
+目录中有 317 个资源提供音频，共 18158 条音轨，mp3 合计约 33.7 GB，且全部为语言类教材
+（英语 270、法语 18、西班牙语 12、德语 9、俄语 5、日语 3）。
+```bash
+python3 pdf_book_download_from_zxxeducn.py --list-audio                 # 查看哪些教材有音频
+python3 pdf_book_download_from_zxxeducn.py --sequence 93 --format audio # 下载单册音频
+python3 pdf_book_download_from_zxxeducn.py --subject 英语 --format audio  # 按学科批量下载
+```
+音频并不在教材自身的元数据里，而是另有一个按册查询的列表接口
+（`relation_audios.json`）。因此没有 PDF 的资源也可能有音频，而且一册教材对应的是几十个
+文件而非一个。这些文件会存入以书名命名的子文件夹，并按平台给出的顺序编号，既保留教学
+顺序，也避免同名音轨互相覆盖：
+
+```
+~/Downloads/textbook_download/接力社版…英语 三年级上册/01 Unit 1_Part A_1. Look, listen and say.mp3
+```
+
+若要在此基础上继续开发，有一点需要注意：PDF 的可下载条目是 `source` 标记的那一个，而音频
+的 `source` 条目在所有镜像上都返回 403。真正可下载的是 `href`（mp3）与 `href-ogg`（ogg），
+所以音频只在这两个标记中挑选，而不是"优先选择"它们。
+
 #### 文件格式
 `--format` 适用于以上所有模式：
 - `--format pdf`: 仅 PDF（默认）
 - `--format pptx`: 仅 PowerPoint
-- `--format all`: 该资源发布的所有格式
+- `--format audio`: 该教材的音频（mp3）
+- `--format ogg`: 同样的音轨，ogg 格式（体积约大 50%，一般选 mp3 即可）
+- `--format all`: pdf、pptx 与 mp3——音频只取一种编码，不会两种都下
 
 ```bash
 python3 pdf_book_download_from_zxxeducn.py --sequence 1981 --format pptx
@@ -449,7 +506,9 @@ python3 pdf_book_download_from_zxxeducn.py --sequence 1981 --format pptx
 #### 列表查询
 - `--list-pptx`: 列出提供 PowerPoint 课件的资源
 - `--list-pdf`: 列出提供 PDF 的资源
-- `--refresh-index`: 重建格式索引缓存（约 3700 次请求，缓存 7 天）；
+- `--list-audio`: 列出提供音频的资源，并显示每册的音轨数量
+- `--refresh-index`: 重建格式索引缓存（约 7500 次请求——每册各查询一次详情与音频列表，
+  缓存 7 天）；
   缓存位于 `~/Library/Caches/textbook-downloader/`（macOS）或 `~/.cache/textbook-downloader/`，
   刻意放在下载目录之外，因此清理下载文件不会导致重新扫描
 
@@ -466,6 +525,7 @@ python3 pdf_book_download_from_zxxeducn.py --sequence 1981 --format pptx
 |---|---|
 | 提供 PDF | 3384 |
 | 提供 PowerPoint | 252（全部同时提供 PDF） |
+| 提供音频 | 317（18158 条音轨，mp3 约 33.7 GB） |
 | 自身无可下载文件 | 359（302 个课程合集 + 57 个未解析） |
 
 #### 特殊教育资源，以及仍未解析的部分
