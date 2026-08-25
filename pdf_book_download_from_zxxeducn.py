@@ -759,11 +759,11 @@ def download_asset(
     is polled to abort mid-stream, so a UI can drive this directly; `quiet`
     suppresses the CLI prints.
     """
+    say = (lambda *a, **k: None) if quiet else print
     if not urls:
         say(f"❌ No {kind} URLs available for {book_name}")
         return False
 
-    say = (lambda *a, **k: None) if quiet else print
     magic = ASSET_KINDS[kind]["magic"]
     suffix = extension or kind
     work_dir = Path(work_path) if work_path else OUTPUT_DIR
