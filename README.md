@@ -182,9 +182,18 @@ python3 pdf_book_download_from_zxxeducn.py --all-pptx --format all --limit 5
 python3 pdf_book_download_from_zxxeducn.py --sequence 1981 --format pptx
 ```
 
-#### Listing
-- `--list-pptx`: list the books that publish a PowerPoint deck
-- `--list-pdf`: list the books that publish a PDF
+#### Listing and selection
+- `--list-pptx` / `--list-pdf`: list the books publishing that format. Each row shows its
+  学段 · 学科 · 版本 · 年级 · 册次, the course it belongs to when its own title does not say
+  (`← #1973 …`), and a ♊/♻️ marker when another Number holds the same book
+- `--stage` / `--subject` / `--version` / `--grade` / `--volume` / `--search`: pick books the
+  way the web UI does. With a `--list-*` flag they narrow the listing; on their own they
+  download everything that matches, so the same filters preview and then fetch a set:
+
+```bash
+python3 pdf_book_download_from_zxxeducn.py --list-pdf --subject 英语 --version 北师大版
+python3 pdf_book_download_from_zxxeducn.py --subject 英语 --version 北师大版 --grade 三年级
+```
 - `--refresh-index`: rebuild the cached format index (~3700 requests, cached for 7 days)
   in `~/Library/Caches/textbook-downloader/` (macOS) or `~/.cache/textbook-downloader/`,
   deliberately outside the downloads folder so clearing downloads does not force a rescan

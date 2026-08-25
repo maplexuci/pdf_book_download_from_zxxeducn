@@ -930,6 +930,7 @@ def pdf_download(
     all_pptx: bool = False,
     list_format: Optional[str] = None,
     refresh_index: bool = False,
+    filters: Optional[Dict[str, Optional[str]]] = None,
 ) -> None:
     """Entry point dispatching to the requested download mode."""
     work_path = OUTPUT_DIR
@@ -939,11 +940,18 @@ def pdf_download(
         print(f"❌ Failed to create output directory {work_path}: {exc}")
         return
 
+    filters = filters or {}
     if list_format:
-        _list_mode(list_format, refresh_index)
+        _list_mode(list_format, refresh_index, filters)
         return
 
     print("🚀 Starting textbook download...")
+
+    if describe_filters(filters):
+        _download_filtered(filters, work_path, formats or ("pdf",), overwrite,
+                           dry_run, download_limit, refresh_index)
+        print(f"📁 Files are in {work_path}")
+        return
 
     if all_pptx:
         _download_all_of_format("pptx", work_path, formats, overwrite, dry_run,
@@ -968,23 +976,115 @@ def pdf_download(
     print(f"📁 Files are in {work_path}")
 
 
-def _list_mode(kind: str, refresh_index: bool) -> None:
-    """Print every book that publishes the given format."""
-    entries = build_asset_index(refresh=refresh_index)
-    index_summary(entries)
+FILTER_DIMENSIONS = ("stage", "subject", "version", "grade", "volume")
 
-    matches = books_with_format(entries, kind)
-    total = sum(e["formats"][kind]["size"] for e in matches)
-    print(f"\n📄 {len(matches)} books publish a {ASSET_KINDS[kind]['label']} "
+
+def catalog_rows(refresh: bool = False) -> List[Dict[str, Any]]:
+    """
+    The enriched index the web UI and the CSV both use.
+
+    Imported inside the function on purpose: catalog_index imports this module,
+    so a module-level import here would be circular. It also keeps the cost off
+    the download modes, which have no use for tags.
+    """
+    import catalog_index
+    return catalog_index.build_index(refresh=refresh)
+
+
+def filter_rows(rows: Sequence[Dict[str, Any]],
+                filters: Dict[str, Optional[str]]) -> List[Dict[str, Any]]:
+    """Keep rows matching every dimension given, and the search term if any."""
+    search = (filters.get("search") or "").strip()
+    out = []
+    for row in rows:
+        if any(filters.get(dim) and filters[dim] not in (row.get(dim) or [])
+               for dim in FILTER_DIMENSIONS):
+            continue
+        if search and search not in row["title"]:
+            continue
+        out.append(row)
+    return out
+
+
+def describe_filters(filters: Dict[str, Optional[str]]) -> str:
+    bits = [f"{dim}={filters[dim]}" for dim in FILTER_DIMENSIONS if filters.get(dim)]
+    if filters.get("search"):
+        bits.append(f"search={filters['search']!r}")
+    return ", ".join(bits)
+
+
+def _row_detail(row: Dict[str, Any]) -> str:
+    """The second line of a listing: what this book is and what it duplicates."""
+    tags = " · ".join((row.get(dim) or [""])[0] for dim in FILTER_DIMENSIONS
+                      if row.get(dim))
+    bits = [tags or "未标注"]
+    parent = row.get("parent") or {}
+    if parent.get("seq"):
+        bits.append(f"← #{parent['seq']} {(parent.get('title') or '')[:30]}")
+    if row.get("alternates"):
+        same = all(a.get("same_file") for a in row["alternates"])
+        others = " ".join(f"#{a['seq']}" for a in row["alternates"])
+        bits.append(f"{'♻️ same file as' if same else '♊ also scanned as'} {others}")
+    return "  ".join(bits)
+
+
+def _list_mode(kind: str, refresh_index: bool,
+               filters: Optional[Dict[str, Optional[str]]] = None) -> None:
+    """Print the books publishing the given format, with what each one is."""
+    rows = [r for r in catalog_rows(refresh=refresh_index)
+            if kind in (r.get("formats") or {})]
+    filters = filters or {}
+    if describe_filters(filters):
+        rows = filter_rows(rows, filters)
+        print(f"\n🔎 Filter: {describe_filters(filters)}")
+
+    total = sum(r["formats"][kind] for r in rows)
+    print(f"\n📄 {len(rows)} books publish a {ASSET_KINDS[kind]['label']} "
           f"file ({human_size(total)} total):\n")
-    for entry in matches:
-        info = entry["formats"][kind]
-        others = ", ".join(k for k in entry["formats"] if k != kind)
+    for row in rows:
+        others = ", ".join(k for k in row["formats"] if k != kind)
         extra = f"  (+{others})" if others else ""
-        print(f"  #{entry['seq']:<5d} {human_size(info['size']):>9s}  "
-              f"{entry['title'][:52]}{extra}")
-    if kind == "pptx":
-        print("\nDownload them all with: --all-pptx")
+        print(f"  #{row['seq']:<5d} {human_size(row['formats'][kind]):>9s}  "
+              f"{row['title'][:56]}{extra}")
+        print(f"         {_row_detail(row)}")
+    if rows:
+        dupes = sum(1 for r in rows if r.get("alternates"))
+        if dupes:
+            print(f"\n⚠️  {dupes} of these are the same book as another row; "
+                  f"downloading all of them fetches some books twice.")
+        print("\nDownload exactly this set by repeating the filters without --list-*.")
+
+
+def _download_filtered(filters: Dict[str, Optional[str]], work_path: Path,
+                       formats: Sequence[str], overwrite: bool, dry_run: bool,
+                       limit: Optional[int], refresh_index: bool) -> None:
+    """Download every book matching the filters - the CLI's bulk selection."""
+    rows = filter_rows(catalog_rows(refresh=refresh_index), filters)
+    rows = [r for r in rows if any(f in (r.get("formats") or {}) for f in formats)]
+    if not rows:
+        print(f"❌ Nothing matches {describe_filters(filters)} in {', '.join(formats)}")
+        return
+    if limit:
+        rows = rows[:limit]
+
+    estimate = sum(r["formats"][f] for r in rows for f in formats if f in r["formats"])
+    print(f"\n📦 {len(rows)} books match {describe_filters(filters)}; "
+          f"fetching {', '.join(formats)} (~{human_size(estimate)})")
+    dupes = sum(1 for r in rows if r.get("alternates"))
+    if dupes:
+        print(f"⚠️  {dupes} of them duplicate another row in this set "
+              f"(--list-{formats[0]} shows which)")
+
+    results: List[Tuple[str, bool, str]] = []
+    for position, row in enumerate(rows, 1):
+        print(f"\n[{position}/{len(rows)}] #{row['seq']}", end=" ")
+        book = {"id": row["id"], "title": row["title"]}
+        for asset_kind, ok, reason in download_book(book, work_path, formats,
+                                                    overwrite, dry_run):
+            results.append((_label(row["title"], asset_kind, f"#{row['seq']} "), ok, reason))
+        if position != len(rows):
+            time.sleep(1)      # be polite to the CDN
+    _report(results)
 
 
 def _download_all_of_format(
@@ -1197,6 +1297,18 @@ NOTES
                         help="List books that publish a PowerPoint deck, then exit")
     parser.add_argument("--list-pdf", action="store_true",
                         help="List books that publish a PDF, then exit")
+    selection = parser.add_argument_group(
+        "selection by 分类",
+        "Pick books the way the web UI does. Combine freely; with --list-pdf or "
+        "--list-pptx they narrow the listing, and on their own they download "
+        "everything that matches.")
+    selection.add_argument("--stage", help="学段, e.g. 小学 / 初中 / 高中 / 特殊教育")
+    selection.add_argument("--subject", help="学科, e.g. 英语 / 数学 / 体育与健康")
+    selection.add_argument("--version", help="版本 (publisher), e.g. 人教版 / 北师大版")
+    selection.add_argument("--grade", help="年级, e.g. 三年级 / 教师用书")
+    selection.add_argument("--volume", help="册次, e.g. 上册 / 全一册")
+    selection.add_argument("--search", help="substring of the book title")
+
     parser.add_argument("--refresh-index", action="store_true",
                         help="Rebuild the cached format index")
     parser.add_argument("--overwrite", action="store_true",
@@ -1224,6 +1336,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             all_pptx=args.all_pptx,
             list_format=list_format,
             refresh_index=args.refresh_index,
+            filters={"stage": args.stage, "subject": args.subject,
+                     "version": args.version, "grade": args.grade,
+                     "volume": args.volume, "search": args.search},
         )
     except KeyboardInterrupt:
         print("\n⏹️  Interrupted by user")
