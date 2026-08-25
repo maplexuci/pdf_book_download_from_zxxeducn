@@ -123,7 +123,11 @@ SPECIAL_EDU_INDEX_PATH = CACHE_DIR / "special_edu_index.json"
 # Bumped when the bundle index gains a field or widens the ids it resolves.
 SPECIAL_EDU_SCHEMA = 2
 LEGACY_INDEX_PATH = OUTPUT_DIR / ".asset_index.json"
-INDEX_MAX_AGE = 7 * 24 * 3600  # refetch the asset index after a week
+# A warm index is reconciled against the live catalogue on every load - seqs
+# re-derived, withdrawn books dropped, new and revised ones probed - so it does
+# not go stale merely by sitting there. This is the backstop for whatever that
+# reconciliation cannot see; `--refresh-index` forces a full rescan at any time.
+INDEX_MAX_AGE = 30 * 24 * 3600
 
 SESSION = requests.Session()
 SESSION.headers.update(HEADERS)
@@ -555,6 +559,9 @@ def probe_book_formats(seq: int, book: Dict[str, Any]) -> Dict[str, Any]:
         "id": book_id,
         "title": book_display_name(book),
         "status": status,
+        # what the catalogue claimed when this was probed, so a later run can
+        # tell whether the book has moved on
+        "update_time": book.get("update_time") or "",
         "formats": {},
     }
     if details is not None:
@@ -611,6 +618,11 @@ def _reconcile_asset_index(entries: List[Dict[str, Any]],
     book's files. Re-derive every `seq` from the live catalogue by id, forget
     entries the catalogue no longer lists, and probe the ones it has gained.
 
+    Books the catalogue has since revised, and books that resolved to no file
+    last time, are re-probed; the rest are taken as they stand. A full scan is
+    ~3700 requests and several minutes, and almost all of it re-confirms books
+    that have not been touched in months.
+
     Returns None when the drift is large enough that a full rescan is cheaper.
     """
     books = flat_catalog()
@@ -625,24 +637,44 @@ def _reconcile_asset_index(entries: List[Dict[str, Any]],
         print(f"🔄 Catalogue has {len(added)} books the index never saw; rescanning")
         return None
 
+    book_by_id = {b.get("id"): b for b in books}
     kept: List[Dict[str, Any]] = []
+    stale: List[Tuple[int, Dict[str, Any]]] = []
     moved = 0
     for entry in entries:
-        seq = seq_by_id.get(entry.get("id", ""))
+        book_id = entry.get("id", "")
+        seq = seq_by_id.get(book_id)
         if seq is None:
             continue                       # withdrawn from the catalogue
         if seq != entry.get("seq"):
             moved += 1
         entry["seq"] = seq
-        kept.append(entry)
 
-    dropped = len(entries) - len(kept)
-    if not (added or dropped or moved):
+        book = book_by_id[book_id]
+        revised = (book.get("update_time") or "") != (entry.get("update_time") or "")
+        # A book that resolved to nothing is re-probed regardless: files are
+        # sometimes attached after publication without the catalogue's
+        # update_time moving, which is exactly how three 体育与健康 volumes sat
+        # looking unavailable for hours after their PDFs went up. A
+        # thematic_course is exempt - it is a container whose children hold the
+        # files, so it has nothing to gain, and re-asking about all 320 of them
+        # every run was most of what the incremental pass still cost.
+        container = book.get("resource_type_code") == "thematic_course"
+        if revised or (not entry.get("formats") and not container):
+            stale.append((seq, book))
+        else:
+            kept.append(entry)
+
+    dropped = len(entries) - len(kept) - len(stale)
+    if not (added or dropped or moved or stale):
         return kept
 
-    if added:
-        print(f"➕ Probing {len(added)} newly catalogued books...")
-        kept.extend(_probe_books(added, workers, report_every=50))
+    if added or stale:
+        work = stale + added
+        print(f"➕ Probing {len(work)} books ({len(added)} new, "
+              f"{sum(1 for s, b in stale if (b.get('update_time') or '') != '')} revised "
+              f"or previously unresolved) - {len(kept)} unchanged books skipped")
+        kept.extend(_probe_books(work, workers, report_every=200))
     if dropped or moved:
         print(f"🔧 Catalogue drift: {moved} books moved, {dropped} withdrawn")
 

@@ -75,8 +75,11 @@ answer 403 on the per-book details endpoint and are reachable only through that 
 resource listing. The child names the parent in its `teachmeterial_ids`, which is what makes
 them resolvable at all - 79 books that previously had no downloadable file.
 
-Both scripts share the same cached format index (7 days; `--refresh-index` rebuilds it), so
-whichever you run first pays the one-time scan cost. Sequence numbers are positions in a
+Both scripts share the same cached format index, so whichever you run first pays the
+one-time scan cost. After that only books the catalogue has actually revised are re-probed:
+each entry remembers the `update_time` it was scanned at, so a warm run asks about a handful
+of books rather than all 3791, turning minutes into seconds. `--refresh-index` forces a full
+rescan when you want one. Sequence numbers are positions in a
 catalogue the platform keeps editing, so on every warm start the index is reconciled against
 the live catalogue: numbers are re-derived, withdrawn books are forgotten, and newly listed
 ones are probed. That costs a handful of requests and keeps `--sequence`, the CSV and the web
@@ -332,8 +335,10 @@ python3 pdf_book_download_from_zxxeducn.py --sequence 1981 --format pptx
 返回 403，只能通过父级的资源列表获取。子节点会在 `teachmeterial_ids` 中指明父级 id，
 正是这一点让它们变得可解析——由此新增 79 本此前无法下载的资源。
 
-两个脚本共用同一份格式索引缓存（7 天；`--refresh-index` 可重建），
-因此先运行哪个都可以，一次扫描的开销只需付出一次。序列号本质上是资源在目录中的位置，
+两个脚本共用同一份格式索引缓存，因此先运行哪个都可以，一次扫描的开销只需付出一次。
+此后仅会重新探测目录中确实有更新的资源：每条记录都会保存扫描时的 `update_time`，
+因此后续运行只需询问少量资源而非全部 3791 本，耗时从数分钟降至数秒。
+如需完整重建，可使用 `--refresh-index`。序列号本质上是资源在目录中的位置，
 而平台会不断增删目录条目，因此每次读取缓存时都会与线上目录对齐一次：重新推导序列号、
 丢弃已下架的资源、补探新上架的资源。这只需要少量请求，却能保证 `--sequence`、CSV
 与网页界面指向的始终是你选中的那本书。
