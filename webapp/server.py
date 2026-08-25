@@ -43,145 +43,23 @@ from urllib.parse import parse_qs, quote, unquote, urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import pdf_book_download_from_zxxeducn as dl  # noqa: E402
+import catalog_index as ci  # noqa: E402
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
-WEB_INDEX_PATH = dl.CACHE_DIR / "web_index.json"
-WEB_INDEX_MAX_AGE = 7 * 24 * 3600
-
-# Platform tag dimensions, in the order the UI cascades them.
-DIMENSIONS: List[Tuple[str, str, str]] = [
-    ("stage", "学段", "zxxxd"),
-    ("subject", "学科", "zxxxk"),
-    ("version", "版本", "zxxbb"),
-    ("grade", "年级", "zxxnj"),
-    ("volume", "册次", "zxxcc"),
-]
-DIM_BY_KEY = {key: dim_id for key, _, dim_id in DIMENSIONS}
-UNTAGGED = "未标注"
-
 MAX_BULK_ITEMS = 500
 JOB_WORKERS = 2
 
+# The index itself lives in catalog_index, shared with textbook_info.py.
+DIMENSIONS = ci.DIMENSIONS
+DIM_BY_KEY = ci.DIM_BY_KEY
+UNTAGGED = ci.UNTAGGED
 
-# ---------------------------------------------------------------------------
-# Index
-# ---------------------------------------------------------------------------
-
-_index_lock = threading.Lock()
-_index: Optional[List[Dict[str, Any]]] = None
 _index_state = {"building": False, "message": "", "ready": False}
 
 
-def _tags_for(book: Dict[str, Any]) -> Dict[str, List[str]]:
-    """Group a book's tags by the dimensions the UI filters on."""
-    grouped: Dict[str, List[str]] = {key: [] for key, _, _ in DIMENSIONS}
-    for tag in book.get("tag_list") or []:
-        dim_id = tag.get("tag_dimension_id")
-        name = tag.get("tag_name")
-        if not name:
-            continue
-        for key, _, wanted in DIMENSIONS:
-            if dim_id == wanted and name not in grouped[key]:
-                grouped[key].append(name)
-
-    # 241 特殊教育 titles (聋校 / 培智) are tagged with BOTH 特殊教育 and the
-    # grade-level 学段 they correspond to, which would otherwise surface
-    # subjects like 律动 under 小学. The platform lists them under 特殊教育
-    # only, so that tag wins. 学段 is the sole dimension ever multi-valued.
-    if len(grouped["stage"]) > 1 and "特殊教育" in grouped["stage"]:
-        grouped["stage"] = ["特殊教育"]
-    return grouped
-
-
 def build_web_index(refresh: bool = False) -> List[Dict[str, Any]]:
-    """
-    Merge the catalogue's facet tags with the downloader's format index.
-
-    Cached on disk; the underlying format index is itself cached, so a warm
-    start is instant.
-    """
-    global _index
-    if _index is not None and not refresh:
-        return _index
-
-    with _index_lock:
-        if _index is not None and not refresh:
-            return _index
-
-        if not refresh and WEB_INDEX_PATH.exists():
-            try:
-                cached = json.loads(WEB_INDEX_PATH.read_text(encoding="utf-8"))
-                if (time.time() - cached.get("generated", 0) < WEB_INDEX_MAX_AGE
-                        and cached.get("books")):
-                    _index = cached["books"]
-                    _index_state.update(ready=True, building=False, message="")
-                    print(f"🗂️  Web index loaded from cache ({len(_index)} books)")
-                    return _index
-            except (json.JSONDecodeError, OSError):
-                pass
-
-        _index_state.update(building=True, ready=False, message="正在获取目录…")
-        print("🔎 Building web index (catalogue + formats)...")
-        assets = {entry["seq"]: entry for entry in dl.build_asset_index(refresh=refresh)}
-        books = dl.flat_catalog()
-
-        # Course bundles hold no file themselves; map them to the child books
-        # they contain so the UI can distinguish "is a container" from
-        # "genuinely has nothing".
-        special = dl.build_special_edu_index()
-        course_children = special.get("courses") or {}
-        seq_by_id = {b.get("id"): i for i, b in enumerate(books, 1)}
-        assets_by_id = {a["id"]: a for a in assets.values()}
-
-        entries: List[Dict[str, Any]] = []
-        for seq, book in enumerate(books, 1):
-            asset = assets.get(seq, {})
-            formats = asset.get("formats") or {}
-            entry: Dict[str, Any] = {
-                "seq": seq,
-                "id": book.get("id", ""),
-                "title": dl.book_display_name(book),
-                "status": asset.get("status", "error"),
-                "formats": {k: v.get("size", 0) for k, v in formats.items()},
-            }
-
-            # kind: what this row IS, which is what the user needs to see
-            #   downloadable - has a file
-            #   course       - a thematic_course bundle; its books are separate rows
-            #   missing      - a real gap: a document with no resolvable file
-            if entry["formats"]:
-                entry["kind"] = "downloadable"
-            elif book.get("resource_type_code") == "thematic_course":
-                entry["kind"] = "course"
-                held = []
-                for child_id in course_children.get(book.get("id", ""), []):
-                    child = assets_by_id.get(child_id)
-                    if child and child.get("formats"):
-                        held.append({
-                            "seq": seq_by_id.get(child_id),
-                            "title": child.get("title", ""),
-                            "formats": sorted(child["formats"]),
-                        })
-                entry["children"] = held
-            else:
-                entry["kind"] = "missing"
-
-            entry.update(_tags_for(book))
-            entries.append(entry)
-
-        _index = entries
-        try:
-            WEB_INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
-            WEB_INDEX_PATH.write_text(
-                json.dumps({"generated": time.time(), "books": entries}, ensure_ascii=False),
-                encoding="utf-8",
-            )
-        except OSError as exc:
-            print(f"⚠️ Could not cache web index: {exc}")
-
-        _index_state.update(building=False, ready=True, message="")
-        print(f"✅ Web index ready: {len(entries)} books")
-        return _index
+    """Build (or reuse) the shared index, reporting progress to /api/status."""
+    return ci.build_index(refresh=refresh, on_status=_index_state.update)
 
 
 # ---------------------------------------------------------------------------
@@ -198,9 +76,12 @@ def _matches_dimension(entry: Dict[str, Any], key: str, wanted: str) -> bool:
 def kind_counts(params: Dict[str, str]) -> Dict[str, int]:
     """How many rows of each kind the current filters would yield."""
     subset = filter_books(params, skip="kind")
-    counts = {"downloadable": 0, "course": 0, "missing": 0}
+    counts = {"downloadable": 0, "course": 0, "duplicate": 0, "missing": 0,
+              "alternate": 0}
     for entry in subset:
         counts[entry.get("kind", "missing")] = counts.get(entry.get("kind", "missing"), 0) + 1
+        if entry.get("alternates"):
+            counts["alternate"] += 1      # a subset of downloadable, not a kind
     return counts
 
 
@@ -226,8 +107,14 @@ def filter_books(params: Dict[str, str], skip: Optional[str] = None) -> List[Dic
         if fmt in ("pdf", "pptx") and fmt not in entry["formats"]:
             continue
         kind = params.get("kind")
-        if kind and skip != "kind" and entry.get("kind") != kind:
-            continue
+        if kind and skip != "kind":
+            # "alternate" is not a kind: those rows are ordinary downloadable
+            # books that happen to have a same-book copy under another number.
+            if kind == "alternate":
+                if not entry.get("alternates"):
+                    continue
+            elif entry.get("kind") != kind:
+                continue
         if availability == "public" and entry["status"] != "ok":
             continue
         if availability == "restricted" and entry["status"] != "restricted":
