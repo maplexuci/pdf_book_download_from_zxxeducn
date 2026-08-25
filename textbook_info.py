@@ -113,6 +113,25 @@ def _belongs_to(entry: Dict[str, Any]) -> str:
     return label or f"(uncatalogued course {parent['id'][:8]})"
 
 
+# weakest first, so a row is described by the least reliable value it relies on
+_ORIGIN_ORDER = [
+    ("namesakes", "GUESSED (namesakes agree)"),
+    ("title", "read from title"),
+    ("derived", "derived from 年级+学制"),
+    ("course", "course"),
+    ("confirmed", "CONFIRMED by hand"),
+    ("declared", "declared"),
+]
+
+
+def _tag_origin(entry: Dict[str, Any]) -> str:
+    sources = set((entry.get("tag_sources") or {}).values())
+    for key, label in _ORIGIN_ORDER:
+        if key in sources:
+            return label
+    return ""
+
+
 def _same_book_as(entry: Dict[str, Any]) -> str:
     """
     Other rows that are the same book: identical title AND identical 分类, both
@@ -141,9 +160,7 @@ def build_rows(entries: Sequence[Dict[str, Any]]) -> List[List[Any]]:
             entry["title"],
             first("stage"), first("subject"), first("version"),
             first("grade"), first("volume"),
-            "course" if entry.get("tags_inherited") else
-            "GUESSED (namesakes agree)" if entry.get("tags_inferred") else
-            ("declared" if entry.get("stage") or entry.get("subject") else ""),
+            _tag_origin(entry),
             ROW_TYPE.get(entry.get("kind"), "book"),
             _belongs_to(entry),
             " ".join(f"#{c['seq']}" for c in children if c.get("seq")),
@@ -181,9 +198,7 @@ def save_textbook_info(
     counted = collections.Counter(e.get("kind") for e in entries)
     with_pdf = sum(1 for r in rows if r[COLUMNS.index("Has PDF")] == "yes")
     with_pptx = sum(1 for r in rows if r[COLUMNS.index("Has PPTX")] == "yes")
-    inherited = sum(1 for r in rows if r[COLUMNS.index("Tags From")] == "course")
-    inferred = sum(1 for r in rows
-                   if r[COLUMNS.index("Tags From")].startswith("GUESSED"))
+    origins = collections.Counter(r[COLUMNS.index("Tags From")] or "(none)" for r in rows)
     print(f"\n💾 Wrote {len(rows)} rows to {csv_path}")
     print(f"   • {with_pdf} with a PDF, {with_pptx} with a PowerPoint deck")
     print(f"   • {counted['course']} course bundles (no file of their own; their "
@@ -195,9 +210,7 @@ def save_textbook_info(
                if any(a.get("same_file") for a in (e.get("alternates") or [])))
     print(f"   • {alts} rows are the same book as another row ({same} of them "
           f"byte-identical, the rest a separate scan); see 'Same Book As'")
-    print(f"   • {inherited} rows took their 分类 from their course; "
-          f"{inferred} are GUESSED from what same-titled rows agree on - not stated "
-          f"by the platform")
+    print("   • 分类 origin: " + ", ".join(f"{v} {k}" for k, v in origins.most_common()))
     print("   • 'Number' is the value to pass to --sequence / --range")
     return csv_path
 

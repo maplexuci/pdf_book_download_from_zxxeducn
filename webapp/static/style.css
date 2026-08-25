@@ -133,9 +133,9 @@ tr.row-child button.mini:hover { border-color: var(--child-ink); }
 }
 
 /* a 分类 the row did not declare itself */
-.inherited { color: var(--muted); font-style: italic; cursor: help; }
-/* weaker still: only what same-titled rows agree on */
-.inferred { color: var(--muted); font-style: italic; cursor: help; opacity: .8; }
+.src-course, .src-title, .src-namesakes, .src-derived { color: var(--muted); font-style: italic; cursor: help; }
+.src-namesakes { opacity: .8; }
+.src-confirmed { color: var(--ok); cursor: help; }
 
 /* a second entry for a book that is downloadable on another row */
 .badge.duplicate { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, var(--line)); }

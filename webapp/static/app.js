@@ -3,6 +3,15 @@
 const DIM_ORDER = ['stage', 'subject', 'version', 'grade', 'volume'];
 const FMT_LABEL = { pdf: 'PDF', pptx: '课件' };
 
+// weakest first: a row is labelled by the least reliable source it relies on
+const SOURCE_MARKS = [
+  ['namesakes', '≈', '该资源及其所属课程均未标注；此分类取自同名资源一致的标注，仅供参考'],
+  ['title', '✎', '该资源未标注；此分类由其书名解析得出'],
+  ['derived', '⊢', '该资源未标注；此学段由年级与学制推导得出'],
+  ['course', '↑', '该资源本身未标注；此分类继承自其所属课程'],
+  ['confirmed', '✓', '平台未提供；此分类经人工核实后写入 catalogue_overrides.json'],
+];
+
 const state = {
   dimensions: [],          // [{key,label}] from the server
   filters: {},             // active dimension selections
@@ -142,14 +151,12 @@ function badgesFor(book) {
 function tagsFor(book) {
   const tags = DIM_ORDER.map((k) => (book[k] || [])[0]).filter(Boolean).join(' · ');
   if (!tags) return '<span class="muted">未标注</span>';
-  // say so when the platform left the row untagged and we supplied the 分类
-  if (book.tags_inherited) {
-    return `<span class="inherited" title="该资源本身未标注，此分类继承自其所属课程">`
-         + `↑ ${tags}</span>`;
-  }
-  if (book.tags_inferred) {
-    return `<span class="inferred" title="该资源及其所属课程均未标注；此分类取自同名资源一致的标注，仅供参考">`
-         + `≈ ${tags}</span>`;
+  // Show where the weakest value came from, so a derived 分类 is never read as
+  // one the platform stated. Order matters: weakest wins the label.
+  const sources = new Set(Object.values(book.tag_sources || {}));
+  for (const [key, mark, hint] of SOURCE_MARKS) {
+    if (!sources.has(key)) continue;
+    return `<span class="src-${key}" title="${hint}">${mark} ${tags}</span>`;
   }
   return tags;
 }
