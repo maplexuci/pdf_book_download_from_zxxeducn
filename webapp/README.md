@@ -12,7 +12,7 @@ python3 webapp/server.py --refresh-index # rescan formats before starting
 |---|---|
 | `server.py` | Stdlib HTTP server: facet index, JSON API, streaming download proxy, bulk job queue, SSE |
 | `static/index.html` | Page structure (Simplified Chinese) |
-| `static/app.js` | Filters, results, selection, job panel |
+| `static/app.js` | Filters, results, expandable course bundles, selection, job panel, history |
 | `static/style.css` | Styling, light + dark |
 
 Every network operation delegates to `pdf_book_download_from_zxxeducn`, so resolution,
@@ -35,6 +35,37 @@ validation and CDN fallback behave exactly as on the CLI.
 ## Notes
 
 - Binds `127.0.0.1`, no authentication, no rate limiting - a local tool.
-- The format index is cached at `~/Downloads/textbook_download/.web_index.json` for 7 days.
+- The view lives in the query string, so Back steps through filters instead of leaving the
+  app, and a filtered page can be reloaded or shared. Typing in the search box replaces the
+  current entry rather than pushing one per keystroke pause.
+- A 📦 course bundle holds no file of its own; expanding it lists its books as indented rows
+  in their own colour, each with its own checkbox and download buttons.
+- 582 rows are children of a compound resource and reach the catalogue with `tag_list` and
+  `tag_paths` both empty, so every dimension read 未标注. They now take their 分类 from the
+  parent course - marked `↑` in the 分类 column, because the row does not declare it itself.
+  A parent the catalogue omits states its taxonomy as one flat tag list, which is sorted into
+  dimensions by matching names against the vocabularies the properly tagged rows establish.
+- 63 rows whose parent is itself uncatalogued get, as a last resort, only the 分类 that
+  every identically-titled row agrees on - marked `≈`, because agreement among namesakes
+  is weaker evidence than a parent's statement. Copying one twin wholesale would invent a
+  publisher: 体育与健康教师用书 体能（全一册） exists under 14 different 版本/学段 pairs, so
+  the ambiguous dimensions are left blank rather than guessed.
+- 4 rows still read 未标注 in every dimension. Nothing states their taxonomy: their own
+  record and their parent's are both empty or 403, no bundle-listing record anywhere
+  carries a tag_list, and no namesake exists to agree with.
+- ♻️ 本条无文件 is a row the platform published twice while wiring the files to only one
+  copy (3 rows). It is not a gap: the row states that IT has nothing and names the
+  sequence number that does, with that file's size. ⚠️ 缺失 therefore means only
+  "genuinely unobtainable", and currently counts 0.
+- ♊ 同名多版本 (134 rows) is the other duplication: both copies DO have a file. Either a
+  separate scan of the same book (#150 at 74.2 MB, #3380 at 38.9 MB) or the very same
+  file published twice (byte-identical, 52 rows) - the row says which. These stay
+  downloadable and selectable; they just warn that a bulk download would otherwise fetch
+  one book twice. Two rows count as the same book only when 版本 is known for both, or
+  when the file is byte-identical: without a publisher a shared title proves nothing,
+  since 体能（全一册）rows with no 版本 include both a 111 MB and a 5 MB book.
+- The web index is cached at `~/Library/Caches/textbook-downloader/web_index.json` for 7 days,
+  and is keyed by book id - the catalogue reorders itself, so joining on sequence number would
+  hand a row another book's files.
 - Bulk jobs run 2 at a time with a 1 s gap, matching the CLI's politeness to the CDN.
 - Downloads resolve to the same folder the CLI uses, and existing files are skipped.

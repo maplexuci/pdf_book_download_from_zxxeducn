@@ -28,11 +28,14 @@ python3 textbook_info.py --pptx-only     # only books with a PowerPoint deck
 
 Written to `~/Downloads/textbook_info/textbook_info.csv`:
 
-| Number | Book ID | Book Name | Has PDF | Has PPTX | PDF Size (MB) | PPTX Size (MB) | Availability |
-|---|---|---|---|---|---|---|---|
-| 1 | bdc00134-... | 统编版...道德与法治一年级上册 | yes | no | 48.2 | | public |
-| 1981 | 6890be8d-... | 第5课 美化处理图片 | yes | yes | 4.6 | 35.1 | public |
-| 2262 | a826f33f-... | 沪教版...体育与健康 一年级（全一册） | no | no | | | restricted by platform |
+| Number | Book Name | Stage / Subject / Version / Grade / Volume | Tags From | Row Type | Belongs To | Has PDF | Has PPTX | Availability |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 统编版...道德与法治一年级上册 | 小学 · 道德与法治 · 统编版 · 一年级 · 上册 | declared | book | | yes | no | public |
+| 1979 | 第5课 美化处理图片 | 小学 · 信息科技 · · 三年级 · 全一册 | course | book | #1973 义务教育信息科技...三年级全一册 | yes | yes | public |
+| 1973 | 义务教育信息科技...三年级全一册 | 小学 · 信息科技 · · 三年级 · 全一册 | declared | course bundle | | no | no | course bundle - 8 book(s) listed separately |
+| 3743 | 体育与健康 学生用书 四年级（全一册） | | | duplicate entry | | no | no | duplicate - see #3788 |
+
+(`Book ID` and the two size columns are omitted above for width; the CSV has 17 columns.)
 
 **`Number` is the sequence number** taken by `--sequence` and `--range`. Find the row you
 want, then pass its Number:
@@ -41,12 +44,43 @@ want, then pass its Number:
 python3 pdf_book_download_from_zxxeducn.py --sequence 1981 --format pptx
 ```
 
-The remaining columns tell you what to expect before committing to a download: `Has PDF` /
-`Has PPTX` with their sizes, and `Availability`, which separates a book that merely has no
-deck from one the platform blocks outright (`restricted by platform`).
+The other columns exist because a title alone is often not enough to identify a row. 270
+titles appear more than once, and many children of a compound resource are titled just
+`第5课 美化处理图片`:
+
+- **Stage / Subject / Version / Grade / Volume** are the same 分类 the web UI filters on,
+  and they tell same-named rows apart - 233 of those 270 groups become distinguishable.
+  **Tags From** records where they came from: `declared` by the row itself (3142 rows),
+  `course` inherited from its parent bundle (582 rows that carry none of their own), or
+  `namesakes` - the weakest, kept only where every identically-titled row agrees (63 rows
+  whose parent is uncatalogued and unreachable). 4 rows have no 分类 from any source.
+- **Belongs To** names the book or course a row sits under, so a bare lesson deck says where
+  it came from; **Contains** lists a bundle's child Numbers.
+- **Row Type** and **Availability** distinguish the reasons a row can have no file of its
+  own: a `course bundle` whose books are listed under their own Numbers (320 rows), a
+  `duplicate entry` whose file is under another Number (3 rows - `Availability` names that
+  Number and the file's size), and a genuine gap - currently **none**. An earlier version
+  of this CSV called all 323 of them `restricted by platform`, which read as 323 missing
+  books.
+- **Same Book As** catches the opposite case: 134 rows where *both* copies have a file,
+  either a separate scan of differing size or the very same file twice (marked
+  `same file`). Check it before bulk-downloading a filtered set, or you will fetch some
+  books twice.
+
+37 title groups still cannot be told apart by any semantic column: they are two separate
+publications of the same book, and differ only in `Number` and PDF size.
+
+Some titles are children of a compound resource whose parent the catalogue never lists; they
+answer 403 on the per-book details endpoint and are reachable only through that parent's
+resource listing. The child names the parent in its `teachmeterial_ids`, which is what makes
+them resolvable at all - 79 books that previously had no downloadable file.
 
 Both scripts share the same cached format index (7 days; `--refresh-index` rebuilds it), so
-whichever you run first pays the one-time scan cost.
+whichever you run first pays the one-time scan cost. Sequence numbers are positions in a
+catalogue the platform keeps editing, so on every warm start the index is reconciled against
+the live catalogue: numbers are re-derived, withdrawn books are forgotten, and newly listed
+ones are probed. That costs a handful of requests and keeps `--sequence`, the CSV and the web
+UI pointing at the book you actually picked.
 
 ### 🌐 Web Interface
 
@@ -294,8 +328,15 @@ python3 pdf_book_download_from_zxxeducn.py --sequence 1981 --format pptx
 `Availability`——用于区分"该资源本就没有课件"与"平台完全禁止下载"
 （`restricted by platform`）两种情况。
 
+部分资源属于某个复合资源的子节点，而其父级并未出现在目录中；这类资源的单本详情接口
+返回 403，只能通过父级的资源列表获取。子节点会在 `teachmeterial_ids` 中指明父级 id，
+正是这一点让它们变得可解析——由此新增 79 本此前无法下载的资源。
+
 两个脚本共用同一份格式索引缓存（7 天；`--refresh-index` 可重建），
-因此先运行哪个都可以，一次扫描的开销只需付出一次。
+因此先运行哪个都可以，一次扫描的开销只需付出一次。序列号本质上是资源在目录中的位置，
+而平台会不断增删目录条目，因此每次读取缓存时都会与线上目录对齐一次：重新推导序列号、
+丢弃已下架的资源、补探新上架的资源。这只需要少量请求，却能保证 `--sequence`、CSV
+与网页界面指向的始终是你选中的那本书。
 
 ### 🌐 网页界面
 
