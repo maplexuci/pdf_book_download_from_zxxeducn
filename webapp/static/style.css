@@ -97,10 +97,18 @@ table.grid { width: 100%; border-collapse: collapse; font-size: 14px; }
 .job-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
 .bar { height: 7px; background: var(--bg); border-radius: 999px; overflow: hidden; }
 .bar > i { display: block; height: 100%; background: var(--accent); transition: width .25s; }
-.audio-cell { display: inline-grid; gap: 3px; justify-items: stretch; }
-.row-progress { display: grid; gap: 2px; }
+/* Fixed width, because the label's text changes every time bytes are pushed.
+   Under `table-layout: auto` a nowrap cell is sized to its widest content, so
+   an unconstrained label re-measures the whole table on each progress tick and
+   every other column twitches. Pinning the label makes that width constant;
+   tabular-nums stops the digits themselves from jittering inside it. */
+.audio-cell { display: inline-grid; gap: 3px; justify-items: stretch;
+              width: 148px; vertical-align: top; }
+.row-progress { display: grid; gap: 2px; min-width: 0; }
 .mini-bar { height: 4px; }
-.row-progress .label { font-size: 11px; line-height: 1.2; white-space: nowrap; }
+.row-progress .label { font-size: 11px; line-height: 1.2; white-space: nowrap;
+                       overflow: hidden; text-overflow: ellipsis;
+                       font-variant-numeric: tabular-nums; }
 .row-progress.done .bar > i { background: var(--ok); }
 .row-progress.failed .bar > i { background: var(--bad); }
 .job-items { max-height: 190px; overflow-y: auto; font-size: 13px; display: grid; gap: 3px; }
