@@ -192,24 +192,36 @@ class JobManager:
     def create(self, items: List[Dict[str, str]]) -> str:
         job_id = uuid.uuid4().hex[:12]
         with self.lock:
+            # A book already being fetched is not queued a second time. Two
+            # jobs for the same book write the same `.part` paths and race:
+            # one renames a part file into place while the other is still
+            # streaming into it, and both come out short. Clicking twice is
+            # easy now that a click enqueues rather than navigates, so this is
+            # the queue's job to refuse, not the button's.
+            active = {(i["id"], i["fmt"]) for job in self.jobs.values()
+                      for i in job["items"] if i["status"] in ("pending", "running")}
+            built = []
+            for item in items:
+                key = (item["id"], item.get("fmt", "pdf"))
+                duplicate = key in active
+                active.add(key)
+                built.append({
+                    "id": item["id"],
+                    "title": item.get("title") or item["id"],
+                    "fmt": key[1],
+                    "status": "skipped" if duplicate else "pending",
+                    "written": 0,
+                    "total": 0,
+                    "error": "已在下载队列中" if duplicate else "",
+                })
             self.jobs[job_id] = {
                 "id": job_id,
                 "created": time.time(),
                 "cancel": False,
-                "items": [
-                    {
-                        "id": item["id"],
-                        "title": item.get("title") or item["id"],
-                        "fmt": item.get("fmt", "pdf"),
-                        "status": "pending",
-                        "written": 0,
-                        "total": 0,
-                        "error": "",
-                    }
-                    for item in items
-                ],
+                "items": built,
             }
-        for position in range(len(items)):
+            queued = [n for n, item in enumerate(built) if item["status"] == "pending"]
+        for position in queued:
             self.work.put((job_id, position))
         self.publish(job_id)
         return job_id

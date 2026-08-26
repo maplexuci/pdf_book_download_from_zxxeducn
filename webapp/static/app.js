@@ -213,17 +213,36 @@ function downloadCell(book) {
   if (book.audio) {
     // Not a link: a single response cannot carry a folder of tracks, so this
     // goes through the download queue and lands on disk beside the PDFs.
+    // Which is why the row needs its own progress: the queue panel is below
+    // the fold, so without this the click reads as nothing having happened.
+    const wrap = document.createElement('div');
+    wrap.className = 'audio-cell';
+
     const button = document.createElement('button');
     button.className = 'mini';
+    button.dataset.audioButton = book.id;
     button.textContent = `🎧 ${book.audio.count} 条`;
     button.title = `下载全部音轨到 ${book.title}/ 文件夹`;
+
+    const progress = document.createElement('div');
+    progress.className = 'row-progress';
+    progress.dataset.book = book.id;
+    progress.hidden = true;
+    progress.innerHTML = '<div class="bar mini-bar"><i></i></div>'
+                       + '<span class="label muted small"></span>';
+
     button.addEventListener('click', async () => {
+      // Say something before the first server update arrives, so the button
+      // never sits silent between the click and the job appearing.
       button.disabled = true;
+      progress.hidden = false;
+      progress.querySelector('.label').textContent = '排队中…';
       const ok = await queue([{ id: book.id, title: book.title, fmt: 'mp3' }]);
-      button.disabled = false;
-      if (ok) refresh();
+      if (!ok) { button.disabled = false; progress.hidden = true; }
     });
-    cell.appendChild(button);
+
+    wrap.append(button, progress);
+    cell.appendChild(wrap);
   }
   return cell;
 }
@@ -357,6 +376,52 @@ function renderRows(books) {
     const children = book.children || [];
     children.forEach((child, i) => tbody.appendChild(childRow(child, i, children.length)));
   }
+  renderRowProgress();      // a re-render must not drop a download in flight
+}
+
+// The audio download each book currently has in flight, newest job wins.
+function audioJobByBook() {
+  const map = new Map();
+  const jobs = [...state.jobs.values()].sort((a, b) => b.created - a.created);
+  const isActive = (i) => i.status === 'pending' || i.status === 'running';
+  for (const job of jobs) {
+    for (const item of job.items) {
+      if (!AUDIO_KINDS.includes(item.fmt)) continue;
+      const held = map.get(item.id);
+      // Newest wins, except that a download in flight always beats a finished
+      // or skipped one: refusing a duplicate click creates a NEWER skipped
+      // item, which would otherwise mask the running job it was refused for.
+      if (!held || (isActive(item) && !isActive(held))) map.set(item.id, item);
+    }
+  }
+  return map;
+}
+
+function renderRowProgress() {
+  const active = audioJobByBook();
+  for (const el of document.querySelectorAll('.row-progress[data-book]')) {
+    const id = el.dataset.book;
+    const item = active.get(id);
+    const button = document.querySelector(`[data-audio-button="${CSS.escape(id)}"]`);
+    if (!item) {
+      // No job for this row - but leave a click's own "排队中…" alone until
+      // the server confirms it, or the label flickers off and back on.
+      if (button && !button.disabled) el.hidden = true;
+      continue;
+    }
+    const running = item.status === 'pending' || item.status === 'running';
+    if (button) button.disabled = running;
+    el.hidden = false;
+    el.classList.toggle('done', item.status === 'done');
+    el.classList.toggle('failed', item.status === 'failed' || item.status === 'cancelled');
+    const pct = item.total ? Math.min(100, (item.written / item.total) * 100)
+                           : (item.status === 'done' ? 100 : 0);
+    el.querySelector('i').style.width = `${item.status === 'done' ? 100 : pct}%`;
+    el.querySelector('.label').textContent =
+      item.status === 'running' && item.total
+        ? `${Math.round(pct)}% · ${fmtSize(item.written)} / ${fmtSize(item.total)}`
+        : statusText(item);
+  }
 }
 
 function renderSelection() {
@@ -369,7 +434,8 @@ function renderSelection() {
 
 function statusText(item) {
   return { pending: '等待中', running: '下载中', done: '完成',
-           failed: item.error || '失败', cancelled: '已取消', skipped: '已存在' }[item.status] || item.status;
+           failed: item.error || '失败', cancelled: '已取消',
+           skipped: item.error || '已存在' }[item.status] || item.status;
 }
 
 function renderJobs() {
@@ -425,6 +491,7 @@ function connectEvents() {
     const job = JSON.parse(event.data);
     state.jobs.set(job.id, job);
     renderJobs();
+    renderRowProgress();
   };
   source.onerror = () => { /* EventSource retries on its own */ };
 }

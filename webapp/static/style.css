@@ -97,6 +97,12 @@ table.grid { width: 100%; border-collapse: collapse; font-size: 14px; }
 .job-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
 .bar { height: 7px; background: var(--bg); border-radius: 999px; overflow: hidden; }
 .bar > i { display: block; height: 100%; background: var(--accent); transition: width .25s; }
+.audio-cell { display: inline-grid; gap: 3px; justify-items: stretch; }
+.row-progress { display: grid; gap: 2px; }
+.mini-bar { height: 4px; }
+.row-progress .label { font-size: 11px; line-height: 1.2; white-space: nowrap; }
+.row-progress.done .bar > i { background: var(--ok); }
+.row-progress.failed .bar > i { background: var(--bad); }
 .job-items { max-height: 190px; overflow-y: auto; font-size: 13px; display: grid; gap: 3px; }
 .job-item { display: flex; justify-content: space-between; gap: 10px; }
 .st-done { color: var(--ok); }
