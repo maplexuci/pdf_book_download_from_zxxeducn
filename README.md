@@ -327,9 +327,35 @@ Downloaded PDFs are saved to:
 - **Permission Errors**: Ensure you have write access to the Downloads folder
 - **Timeout Errors**: The script will automatically retry with different CDN endpoints
 
+### ⚖️ Scope and use
+
+**This tool downloads; it does not redistribute.** Nothing in this repository is
+platform content - it is roughly 230 KB of Python, JavaScript and documentation. When
+you run it, files travel from the platform's own servers to your machine. They never
+pass through the author, and no copy of them is hosted anywhere by this project.
+
+**What you do with the files afterwards is governed by the platform, not by this
+licence.** The 国家中小学智慧教育平台 publishes a website statement at
+[basic.smartedu.cn/copyright](https://basic.smartedu.cn/copyright) which says that,
+without permission, no media outlet, website, app, commercial organisation or
+individual may republish (转载) or adapt (改编) content published on the platform. It
+gives `ncetbgs@moe.edu.cn` as the contact for obtaining a licence. Downloading a
+textbook to read is not the same as putting it back online: please do not
+redistribute what you fetch, and do not sell it.
+
+**On the CDN hostnames.** The metadata lists files under `*-ndr-private` hosts, which
+answer HTTP 401, and this tool rewrites them to the `*-ndr-oversea` mirror. That mirror
+is not a back door: the platform's own pages load media from it. Opening a textbook's
+detail page on basic.smartedu.cn and watching the requests shows the page itself
+fetching audio from `r3-ndr-oversea.ykt.cbern.com.cn` - the same host, the same path,
+the same file this tool resolves.
+
+This is not legal advice.
+
 ### 📝 License
 
-Open source - feel free to use and modify as needed.
+[MIT](LICENSE) - for the code in this repository. It does not grant any rights over
+the teaching materials the tool downloads, which belong to their rights holders.
 
 ---
 
@@ -606,9 +632,30 @@ python3 pdf_book_download_from_zxxeducn.py --table 1 --item 5
 - **权限错误**: 确保对Downloads文件夹有写入权限
 - **超时错误**: 脚本将自动尝试不同的CDN端点
 
+### ⚖️ 使用范围说明
+
+**本工具只负责下载，不进行任何再分发。** 本仓库中不含任何平台内容，仅有约 230 KB 的
+Python、JavaScript 代码与文档。运行时，文件由平台自己的服务器直接传输到你的机器，
+既不经过作者，本项目也未在任何地方保存这些文件的副本。
+
+**文件下载之后如何使用，由平台的规定决定，与本项目的开源许可无关。**
+国家中小学智慧教育平台在
+[basic.smartedu.cn/copyright](https://basic.smartedu.cn/copyright)
+发布的网站声明指出：未经许可，任何媒体、互联网站、App 应用、商业机构、个人不得转载或
+改编该平台发布的内容，并提供 `ncetbgs@moe.edu.cn` 作为获取许可的联系方式。
+下载教材自用与将其重新发布到网上并不是一回事：请不要再分发所下载的内容，也不要用于售卖。
+
+**关于 CDN 主机名。** 元数据中的文件地址指向 `*-ndr-private` 主机，该主机返回 HTTP 401，
+本工具会将其改写为 `*-ndr-oversea` 镜像。该镜像并非"后门"：平台自身的页面就从它加载媒体
+文件。在 basic.smartedu.cn 打开某本教材的详情页并观察其网络请求，可以看到页面本身正是从
+`r3-ndr-oversea.ykt.cbern.com.cn` 获取音频——相同的主机、相同的路径、相同的文件。
+
+以上内容不构成法律意见。
+
 ### 📝 许可证
 
-开源 - 可自由使用和修改。
+[MIT](LICENSE) —— 仅适用于本仓库中的代码，不授予对所下载教学资源的任何权利，
+相关资源的权利归各自权利人所有。
 
 ---
 
